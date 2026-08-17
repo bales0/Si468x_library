@@ -43,6 +43,56 @@
  * EEPROM, buttons and station storage stay entirely in the application.
  */
 
+/*
+ * ============================================================================
+ * Si468x FAMILY CAPABILITY MATRIX -- HUMAN / AI QUICK REFERENCE
+ * ============================================================================
+ *
+ * Device   FM   RDS   AM   HD-FM   HD-AM   DAB   DAB+
+ * -----------------------------------------------------
+ * Si4682   YES  YES   NO   YES     NO      NO    NO
+ * Si4683   YES  YES   YES  YES     YES     NO    NO
+ * Si4684   YES  YES   NO   NO      NO      YES   YES
+ * Si4685   YES  YES   YES  NO      NO      YES   YES
+ * Si4688   YES  YES   NO   YES     NO      YES   YES
+ * Si4689   YES  YES   YES  YES     YES     YES   YES
+ *
+ * Source note:
+ *   - Si4682/83/84/88/89 capability grouping follows AN649 Rev. 1.9.
+ *   - Si4685 capability grouping follows the later Si468x family table in
+ *     AN651 (Skyworks, Rev. 0.5).
+ *
+ * IMPORTANT -- SILICON CAPABILITY != CURRENT COMMAND AVAILABILITY
+ * ---------------------------------------------------------------------------
+ * A device may support several radio standards in silicon, but only commands
+ * belonging to the firmware image currently running in RAM are usable.
+ * Example: Si4689 supports FM, AM, HD and DAB, but DAB_TUNE_FREQ is usable only
+ * while a DAB/DAB+ image is active.
+ *
+ * Runtime helpers:
+ *   detectedPart()          -> cached silicon part from GET_PART_INFO
+ *   activeImage()           -> cached image family from GET_SYS_STATE
+ *   capabilities()          -> hardware capability matrix for the part
+ *   partSupports(feature)   -> hardware-only capability check
+ *   featureAvailability()   -> hardware + active-image availability
+ *   commandAvailability()   -> command-level hardware + image check
+ *
+ * Documentation convention used throughout the public API:
+ *
+ *   SI468X-SUPPORT:  hardware members that can implement the function.
+ *   SI468X-FIRMWARE: firmware/boot state required for the function.
+ *   SI468X-AN649:    command/property used, or protocol role.
+ *
+ * These fixed labels are intentionally repetitive. They make the single-header
+ * file easy to search and make isolated code snippets self-describing for both
+ * human reviewers and AI/code-analysis tools.
+ *
+ * "ALL" means all currently documented family members listed above. A command
+ * may still have a firmware-revision caveat stated in its nearby comment or in
+ * AN649. The device's own ERR_CMD / NOT_SUPPORTED response remains authoritative.
+ * ============================================================================
+ */
+
 #include <stdint.h>
 #include <stddef.h>
 #include <string.h>
@@ -51,7 +101,7 @@ namespace si468x {
 
 static const uint16_t LIBRARY_VERSION_MAJOR = 0;
 static const uint16_t LIBRARY_VERSION_MINOR = 9;
-static const uint16_t LIBRARY_VERSION_PATCH = 1;
+static const uint16_t LIBRARY_VERSION_PATCH = 3;
 
 // -----------------------------------------------------------------------------
 // 1. Small endian helpers.  Si468x command/reply multi-byte values are LSB first.
@@ -77,6 +127,7 @@ inline void writeLe32(uint8_t* p, uint32_t v) {
 // -----------------------------------------------------------------------------
 
 enum class Command : uint8_t {
+    // COMMON / BOOT / CONTROL -- SI468X-SUPPORT: ALL
     RD_REPLY = 0x00,
     POWER_UP = 0x01,
     HOST_LOAD = 0x04,
@@ -90,16 +141,23 @@ enum class Command : uint8_t {
     GET_FUNC_INFO = 0x12,
     SET_PROPERTY = 0x13,
     GET_PROPERTY = 0x14,
+    // FM / FMHD -- SI468X-SUPPORT: Si4682 Si4683 Si4684 Si4685 Si4688 Si4689
+    // SI468X-FIRMWARE: FM/FMHD
     FM_TUNE_FREQ = 0x30,
     FM_SEEK_START = 0x31,
     FM_RSQ_STATUS = 0x32,
     FM_ACF_STATUS = 0x33,
     FM_RDS_STATUS = 0x34,
     FM_RDS_BLOCKCOUNT = 0x35,
+    // DIGITAL SERVICE TRANSPORT -- DAB and/or HD capable devices
+    // SI468X-SUPPORT: ALL (each family member has DAB or HD capability)
+    // SI468X-FIRMWARE: DAB/DAB+ or HD-capable FMHD/AMHD image
     GET_DIGITAL_SERVICE_LIST = 0x80,
     START_DIGITAL_SERVICE = 0x81,
     STOP_DIGITAL_SERVICE = 0x82,
     GET_DIGITAL_SERVICE_DATA = 0x84,
+    // HD RADIO -- SI468X-SUPPORT: Si4682 Si4683 Si4688 Si4689
+    // SI468X-FIRMWARE: FMHD; AMHD additionally on Si4683/Si4689 where applicable
     HD_DIGRAD_STATUS = 0x92,
     HD_GET_EVENT_STATUS = 0x93,
     HD_GET_STATION_INFO = 0x94,
@@ -109,9 +167,13 @@ enum class Command : uint8_t {
     HD_TEST_GET_BER_INFO = 0x98,
     HD_SET_ENABLED_PORTS = 0x99,
     HD_GET_ENABLED_PORTS = 0x9A,
+    // DIAGNOSTIC / TEST -- availability may depend on active image revision
     TEST_GET_RSSI = 0xE5,
+    // ON-CHIP STORAGE ACCESS -- common command family
     WRITE_STORAGE = 0x15,
     READ_STORAGE = 0x16,
+    // DAB / DAB+ -- SI468X-SUPPORT: Si4684 Si4685 Si4688 Si4689
+    // SI468X-FIRMWARE: DAB/DAB+
     DAB_TUNE_FREQ = 0xB0,
     DAB_DIGRAD_STATUS = 0xB2,
     DAB_GET_EVENT_STATUS = 0xB3,
@@ -132,6 +194,8 @@ enum class Command : uint8_t {
      * therefore intentionally not invented here; executeRaw() can access a
      * later documented implementation when its command definition is known.
      */
+    // AM / AMHD -- SI468X-SUPPORT: Si4683 Si4685 Si4689
+    // SI468X-FIRMWARE: AM/AMHD
     AM_TUNE_FREQ = 0x40,
     AM_SEEK_START = 0x41,
     AM_RSQ_STATUS = 0x42,
@@ -139,6 +203,7 @@ enum class Command : uint8_t {
 };
 
 enum class Property : uint16_t {
+    // COMMON PROPERTIES -- SI468X-SUPPORT: ALL; active-image semantics apply
     INT_CTL_ENABLE = 0x0000,
     INT_CTL_REPEAT = 0x0001,
     DIGITAL_IO_OUTPUT_SELECT = 0x0200,
@@ -156,6 +221,7 @@ enum class Property : uint16_t {
     WAKE_TONE_PERIOD = 0x0901,
     WAKE_TONE_FREQ = 0x0902,
     WAKE_TONE_AMPLITUDE = 0x0903,
+    // FM / FMHD PROPERTIES -- SI468X-SUPPORT: ALL; SI468X-FIRMWARE: FM/FMHD
     FM_TUNE_FE_VARM = 0x1710,
     FM_TUNE_FE_VARB = 0x1711,
     FM_TUNE_FE_CFG = 0x1712,
@@ -213,8 +279,11 @@ enum class Property : uint16_t {
     FM_RDS_INTERRUPT_FIFO_COUNT = 0x3C01,
     FM_RDS_CONFIG = 0x3C02,
     FM_RDS_CONFIDENCE = 0x3C03,
+    // DIGITAL SERVICE PROPERTIES -- DAB and HD data-service images
     DIGITAL_SERVICE_INT_SOURCE = 0x8100,
     DIGITAL_SERVICE_RESTART_DELAY = 0x8101,
+    // HD RADIO PROPERTIES -- SI468X-SUPPORT: Si4682 Si4683 Si4688 Si4689
+    // SI468X-FIRMWARE: FMHD / AMHD as applicable
     HD_BLEND_OPTIONS = 0x9101,
     HD_BLEND_ANALOG_TO_HD_TRANSITION_TIME = 0x9102,
     HD_BLEND_HD_TO_ANALOG_TRANSITION_TIME = 0x9103,
@@ -268,6 +337,8 @@ enum class Property : uint16_t {
     HD_EZBLEND_SPS_BLEND_RATE = 0x9B05,
     HD_TEST_BER_CONFIG = 0xE800,
     HD_TEST_DEBUG_AUDIO = 0xE801,
+    // DAB / DAB+ PROPERTIES -- SI468X-SUPPORT: Si4684 Si4685 Si4688 Si4689
+    // SI468X-FIRMWARE: DAB/DAB+; property IDs may overlap FM IDs by image design
     DAB_TUNE_FE_VARM = 0x1710,
     DAB_TUNE_FE_VARB = 0x1711,
     DAB_TUNE_FE_CFG = 0x1712,
@@ -292,6 +363,8 @@ enum class Property : uint16_t {
     DAB_CTRL_DAB_MUTE_SIGLOSS_THRESHOLD = 0xB504,
     DAB_CTRL_DAB_MUTE_SIGLOW_THRESHOLD = 0xB505,
     DAB_TEST_BER_CONFIG = 0xE800,
+    // AM / AMHD PROPERTIES -- SI468X-SUPPORT: Si4683 Si4685 Si4689
+    // SI468X-FIRMWARE: AM/AMHD
     AM_AVC_MIN_GAIN = 0x0500,
     AM_AVC_MAX_GAIN = 0x0501,
     AM_CHBW_SQ_LIMITS = 0x2200,
@@ -439,6 +512,12 @@ enum class Part : uint16_t {
     Si4689 = 4689
 };
 
+enum class Feature : uint8_t {
+    FM, RDS, AM, HDFM, HDAM, DAB, DABPlus, DigitalServices
+};
+
+enum class Availability : uint8_t { Unknown=0, Unsupported=1, Supported=2 };
+
 struct Capabilities {
     bool fm;
     bool rds;
@@ -447,11 +526,33 @@ struct Capabilities {
     bool hdAm;
     bool dab;
     bool dabPlus;
+    bool digitalServices;
 
     Capabilities() : fm(false), rds(false), am(false), hdFm(false), hdAm(false),
-                     dab(false), dabPlus(false) {}
+                     dab(false), dabPlus(false), digitalServices(false) {}
+
+    bool supports(Feature f) const {
+        switch (f) {
+            case Feature::FM: return fm;
+            case Feature::RDS: return rds;
+            case Feature::AM: return am;
+            case Feature::HDFM: return hdFm;
+            case Feature::HDAM: return hdAm;
+            case Feature::DAB: return dab;
+            case Feature::DABPlus: return dabPlus;
+            case Feature::DigitalServices: return digitalServices;
+        }
+        return false;
+    }
 };
 
+/*
+ * Hardware-family capability map.  PART is returned by GET_PART_INFO as the
+ * decimal product number (4682, 4683, ...), exactly as specified by AN649.
+ * This table says what the silicon family member can support; the currently
+ * loaded firmware image still determines which mode-specific commands are
+ * available at any particular moment.
+ */
 inline Capabilities capabilitiesForPart(uint16_t part) {
     Capabilities c;
     switch (part) {
@@ -464,7 +565,22 @@ inline Capabilities capabilitiesForPart(uint16_t part) {
                    c.dab=true; c.dabPlus=true; break;
         default: break;
     }
+    c.digitalServices = c.dab || c.hdFm || c.hdAm;
     return c;
+}
+
+inline bool imageSupportsFeature(Image image, Feature feature) {
+    switch (feature) {
+        case Feature::FM: return image==Image::FMHD;
+        case Feature::RDS: return image==Image::FMHD;
+        case Feature::AM: return image==Image::AMHD;
+        case Feature::HDFM: return image==Image::FMHD;
+        case Feature::HDAM: return image==Image::AMHD;
+        case Feature::DAB:
+        case Feature::DABPlus: return image==Image::DAB;
+        case Feature::DigitalServices: return image==Image::FMHD || image==Image::AMHD || image==Image::DAB;
+    }
+    return false;
 }
 
 /* Parsed four-byte status word returned at the start of every reply. */
@@ -848,50 +964,149 @@ struct DlsFrame {
 // 6. Main driver.
 // -----------------------------------------------------------------------------
 
+class DabServiceListParser;
+
 class Si468x {
 public:
+    // SI468X-API: Si468x | SI468X-SUPPORT: ALL | SI468X-FIRMWARE: none (host-side configuration) | SI468X-AN649: host abstraction
     Si468x() : _workspace(0), _workspaceSize(0), _statusCallback(0), _statusContext(0),
                _irqPending(0), _state(State::Idle), _lastResult(Result::Ok), _reply(0),
                _replyLength(0), _deadline(0), _nextCtsPoll(0), _nextIdlePoll(0),
-               _ctsPollIntervalUs(1000), _idlePollIntervalUs(50000), _lastDeviceError(0) {}
+               _ctsPollIntervalUs(1000), _idlePollIntervalUs(50000), _lastDeviceError(0),
+               _detectedPart(Part::Unknown), _activeImage(Image::Unknown) {}
 
+    // SI468X-API: Si468x | SI468X-SUPPORT: ALL | SI468X-FIRMWARE: none (host-side configuration) | SI468X-AN649: host abstraction
     explicit Si468x(const HostInterface& host) : Si468x() { _host = host; }
 
+    // SI468X-API: setHost | SI468X-SUPPORT: ALL | SI468X-FIRMWARE: none (host-side configuration) | SI468X-AN649: host abstraction
     void setHost(const HostInterface& host) { _host = host; }
+    // SI468X-API: host | SI468X-SUPPORT: ALL | SI468X-FIRMWARE: none (host-side configuration) | SI468X-AN649: host abstraction
     const HostInterface& host() const { return _host; }
 
+    // SI468X-API: setWorkspace | SI468X-SUPPORT: ALL | SI468X-FIRMWARE: none (host-side configuration) | SI468X-AN649: host abstraction
     void setWorkspace(uint8_t* buffer, size_t size) {
         _workspace = buffer; _workspaceSize = size;
     }
+    // SI468X-API: workspace | SI468X-SUPPORT: ALL | SI468X-FIRMWARE: none (host-side configuration) | SI468X-AN649: host abstraction
     uint8_t* workspace() const { return _workspace; }
+    // SI468X-API: workspaceSize | SI468X-SUPPORT: ALL | SI468X-FIRMWARE: none (host-side configuration) | SI468X-AN649: host abstraction
     size_t workspaceSize() const { return _workspaceSize; }
 
+    // SI468X-API: setStatusCallback | SI468X-SUPPORT: ALL | SI468X-FIRMWARE: none (host-side configuration) | SI468X-AN649: host abstraction
     void setStatusCallback(StatusCallback cb, void* context=0) {
         _statusCallback=cb; _statusContext=context;
     }
 
+    // SI468X-API: setCtsPollIntervalUs | SI468X-SUPPORT: ALL | SI468X-FIRMWARE: none (host-side configuration) | SI468X-AN649: host abstraction
     void setCtsPollIntervalUs(uint32_t us) { _ctsPollIntervalUs=us; }
+    // SI468X-API: setIdleStatusPollIntervalUs | SI468X-SUPPORT: ALL | SI468X-FIRMWARE: none (host-side configuration) | SI468X-AN649: host abstraction
     void setIdleStatusPollIntervalUs(uint32_t us) { _idlePollIntervalUs=us; }
 
     /* Optional board-control hooks. Electrical polarity belongs in the adapter. */
+    // SI468X-API: setResetAsserted | SI468X-SUPPORT: ALL | SI468X-FIRMWARE: boot/reset hardware control; board adapter dependent | SI468X-AN649: reset/power sequencing
     Result setResetAsserted(bool asserted) {
         if (!_host.setReset) return Result::Unsupported;
         _host.setReset(_host.context,asserted); return Result::Ok;
     }
+    // SI468X-API: setPowerEnabled | SI468X-SUPPORT: ALL | SI468X-FIRMWARE: boot/reset hardware control; board adapter dependent | SI468X-AN649: reset/power sequencing
     Result setPowerEnabled(bool enabled) {
         if (!_host.setPower) return Result::Unsupported;
         _host.setPower(_host.context,enabled); return Result::Ok;
     }
 
+    /*
+     * Generic board reset sequence using only platform callbacks.  The defaults
+     * reproduce the conservative sequence used by the proven DABShield code;
+     * applications may shorten the delays when their hardware timing has been
+     * validated against the device data sheet.
+     */
+    // SI468X-API: hardwareReset | SI468X-SUPPORT: ALL | SI468X-FIRMWARE: boot/reset hardware control; board adapter dependent | SI468X-AN649: reset/power sequencing
+    Result hardwareReset(uint32_t powerSettleUs=100000UL,
+                         uint32_t resetAssertUs=100000UL,
+                         uint32_t resetReleaseUs=100000UL) {
+        if (!_host.setReset || !_host.timeUs) return Result::Unsupported;
+        if (_host.setPower) { _host.setPower(_host.context,true); Result r=delayUs(powerSettleUs); if (r!=Result::Ok) return r; }
+        _host.setReset(_host.context,true);
+        Result r=delayUs(resetAssertUs); if (r!=Result::Ok) return r;
+        _host.setReset(_host.context,false);
+        return delayUs(resetReleaseUs);
+    }
+
     /* Call from the platform ISR.  Do not perform bus traffic in the ISR. */
+    // SI468X-API: notifyInterrupt | SI468X-SUPPORT: ALL | SI468X-FIRMWARE: any state | SI468X-AN649: host-side state/event engine
     void notifyInterrupt() { _irqPending = 1; }
 
+    // SI468X-API: busy | SI468X-SUPPORT: ALL | SI468X-FIRMWARE: any state | SI468X-AN649: host-side state/event engine
     bool busy() const { return _state != State::Idle; }
+    // SI468X-API: lastResult | SI468X-SUPPORT: ALL | SI468X-FIRMWARE: any state | SI468X-AN649: host-side state/event engine
     Result lastResult() const { return _lastResult; }
+    // SI468X-API: lastStatus | SI468X-SUPPORT: ALL | SI468X-FIRMWARE: any state | SI468X-AN649: host-side state/event engine
     const Status& lastStatus() const { return _lastStatus; }
+    // SI468X-API: lastDeviceError | SI468X-SUPPORT: ALL | SI468X-FIRMWARE: any state | SI468X-AN649: host-side state/event engine
     uint8_t lastDeviceError() const { return _lastDeviceError; }
 
+    /*
+     * Runtime identity/capability helpers. getPartInfo() and getSystemState()
+     * update these cached values automatically. Hardware capability and active
+     * firmware mode are intentionally kept separate: a Si4689 can support DAB,
+     * for example, while DAB commands are unavailable when an FMHD image is
+     * currently running.
+     */
+    // SI468X-API: detectedPart | SI468X-SUPPORT: ALL | SI468X-FIRMWARE: any; cached identity requires GET_PART_INFO/GET_SYS_STATE where supported | SI468X-AN649: runtime capability model
+    Part detectedPart() const { return _detectedPart; }
+    // SI468X-API: activeImage | SI468X-SUPPORT: ALL | SI468X-FIRMWARE: any; cached identity requires GET_PART_INFO/GET_SYS_STATE where supported | SI468X-AN649: runtime capability model
+    Image activeImage() const { return _activeImage; }
+    // SI468X-API: capabilities | SI468X-SUPPORT: ALL | SI468X-FIRMWARE: any; cached identity requires GET_PART_INFO/GET_SYS_STATE where supported | SI468X-AN649: runtime capability model
+    Capabilities capabilities() const { return capabilitiesForPart((uint16_t)_detectedPart); }
+    // SI468X-API: partSupports | SI468X-SUPPORT: ALL | SI468X-FIRMWARE: any; cached identity requires GET_PART_INFO/GET_SYS_STATE where supported | SI468X-AN649: runtime capability model
+    bool partSupports(Feature f) const { return capabilities().supports(f); }
+    // SI468X-API: featureAvailability | SI468X-SUPPORT: ALL | SI468X-FIRMWARE: any; cached identity requires GET_PART_INFO/GET_SYS_STATE where supported | SI468X-AN649: runtime capability model
+    Availability featureAvailability(Feature f) const {
+        const Capabilities c=capabilities();
+        if (_detectedPart==Part::Unknown) return Availability::Unknown;
+        if (!c.supports(f)) return Availability::Unsupported;
+        if (_activeImage==Image::Unknown || _activeImage==Image::Bootloader) return Availability::Unknown;
+        return imageSupportsFeature(_activeImage,f) ? Availability::Supported : Availability::Unsupported;
+    }
+
+    // SI468X-API: commandAvailability | SI468X-SUPPORT: ALL | SI468X-FIRMWARE: any; cached identity requires GET_PART_INFO/GET_SYS_STATE where supported | SI468X-AN649: runtime capability model
+    Availability commandAvailability(Command command) const {
+        Feature f=Feature::FM;
+        bool modeSpecific=true;
+        switch (command) {
+            case Command::FM_TUNE_FREQ: case Command::FM_SEEK_START: case Command::FM_RSQ_STATUS:
+            case Command::FM_ACF_STATUS: f=Feature::FM; break;
+            case Command::FM_RDS_STATUS: case Command::FM_RDS_BLOCKCOUNT: f=Feature::RDS; break;
+            case Command::AM_TUNE_FREQ: case Command::AM_SEEK_START: case Command::AM_RSQ_STATUS:
+            case Command::AM_ACF_STATUS: f=Feature::AM; break;
+            case Command::DAB_TUNE_FREQ: case Command::DAB_DIGRAD_STATUS: case Command::DAB_GET_EVENT_STATUS:
+            case Command::DAB_GET_ENSEMBLE_INFO: case Command::DAB_GET_SERVICE_LINKING_INFO:
+            case Command::DAB_SET_FREQ_LIST: case Command::DAB_GET_FREQ_LIST: case Command::DAB_GET_COMPONENT_INFO:
+            case Command::DAB_GET_TIME: case Command::DAB_GET_AUDIO_INFO: case Command::DAB_GET_SUBCHAN_INFO:
+            case Command::DAB_GET_FREQ_INFO: case Command::DAB_GET_SERVICE_INFO: case Command::DAB_TEST_GET_BER_INFO:
+                f=Feature::DAB; break;
+            case Command::HD_DIGRAD_STATUS: case Command::HD_GET_EVENT_STATUS: case Command::HD_GET_STATION_INFO:
+            case Command::HD_GET_PSD_DECODE: case Command::HD_GET_ALERT_MSG: case Command::HD_PLAY_ALERT_TONE:
+            case Command::HD_TEST_GET_BER_INFO: case Command::HD_SET_ENABLED_PORTS: case Command::HD_GET_ENABLED_PORTS:
+                if (_activeImage==Image::AMHD) f=Feature::HDAM;
+                else if (_activeImage==Image::FMHD) f=Feature::HDFM;
+                else {
+                    if (_detectedPart==Part::Unknown) return Availability::Unknown;
+                    const Capabilities c=capabilities();
+                    return (c.hdFm||c.hdAm)?Availability::Unknown:Availability::Unsupported;
+                }
+                break;
+            case Command::GET_DIGITAL_SERVICE_LIST: case Command::START_DIGITAL_SERVICE:
+            case Command::STOP_DIGITAL_SERVICE: case Command::GET_DIGITAL_SERVICE_DATA:
+                f=Feature::DigitalServices; break;
+            default: modeSpecific=false; break;
+        }
+        if (!modeSpecific) return Availability::Supported;
+        return featureAvailability(f);
+    }
+
     /* Read the currently available status/reply bytes without issuing a command. */
+    // SI468X-API: readCurrentReply | SI468X-SUPPORT: ALL | SI468X-FIRMWARE: command/state dependent | SI468X-AN649: common command/response engine
     Result readCurrentReply(uint8_t* destination, uint16_t length) {
         if (!_host.readReply) return Result::NoTransport;
         if (!destination || length < 4) return Result::InvalidArgument;
@@ -901,6 +1116,7 @@ public:
         return _lastStatus.commandError() ? Result::DeviceError : Result::Ok;
     }
 
+    // SI468X-API: readStatus | SI468X-SUPPORT: ALL | SI468X-FIRMWARE: command/state dependent | SI468X-AN649: common command/response engine
     Result readStatus(Status& out) {
         uint8_t b[4];
         if (!_host.readReply) return Result::NoTransport;
@@ -915,6 +1131,7 @@ public:
      * Waiting for CTS and reading `replyLength` bytes is handled by service().
      * The caller owns the reply buffer until the operation completes.
      */
+    // SI468X-API: startCommand | SI468X-SUPPORT: ALL | SI468X-FIRMWARE: command/state dependent | SI468X-AN649: common command/response engine
     Result startCommand(Command command, const uint8_t* args, uint16_t argLength,
                         uint8_t* reply=0, uint16_t replyLength=0,
                         uint32_t timeoutUs=1000000UL) {
@@ -939,6 +1156,7 @@ public:
      * With INTB connected, notifyInterrupt() causes immediate status service.
      * Without INTB, the configured polling intervals provide a fallback.
      */
+    // SI468X-API: service | SI468X-SUPPORT: ALL | SI468X-FIRMWARE: command/state dependent | SI468X-AN649: common command/response engine
     Result service() {
         const uint32_t now = nowUs();
         if (_state == State::WaitCts) {
@@ -996,6 +1214,7 @@ public:
     }
 
     /* Blocking convenience wrapper built on the same state machine. */
+    // SI468X-API: executeCommand | SI468X-SUPPORT: ALL | SI468X-FIRMWARE: command/state dependent | SI468X-AN649: common command/response engine
     Result executeCommand(Command command, const uint8_t* args, uint16_t argLength,
                           uint8_t* reply=0, uint16_t replyLength=0,
                           uint32_t timeoutUs=1000000UL) {
@@ -1015,6 +1234,7 @@ public:
      * for very small applications. Event-driven applications should use INTB,
      * notifyInterrupt(), service() and the status callback instead.
      */
+    // SI468X-API: waitForStatus0 | SI468X-SUPPORT: ALL | SI468X-FIRMWARE: command/state dependent | SI468X-AN649: common command/response engine
     Result waitForStatus0(uint8_t mask, Status& out, uint32_t timeoutUs=3000000UL) {
         if (!_host.timeUs) return Result::NoTimer;
         const uint32_t start=nowUs();
@@ -1028,27 +1248,34 @@ public:
             if (_host.idle) _host.idle(_host.context);
         }
     }
+    // SI468X-API: waitForStc | SI468X-SUPPORT: ALL | SI468X-FIRMWARE: command/state dependent | SI468X-AN649: common command/response engine
     Result waitForStc(Status& out, uint32_t timeoutUs=3000000UL) { return waitForStatus0(0x01u,out,timeoutUs); }
 
+    // SI468X-API: setVolume | SI468X-SUPPORT: ALL | SI468X-FIRMWARE: running application image with audio output | SI468X-AN649: AUDIO_ANALOG_VOLUME (0x0300) / AUDIO_MUTE (0x0301)
     Result setVolume(uint8_t volume, uint32_t timeoutUs=1000000UL) {
         if (volume>63u) return Result::InvalidArgument;
         return setProperty(Property::AUDIO_ANALOG_VOLUME,volume,timeoutUs);
     }
+    // SI468X-API: setMute | SI468X-SUPPORT: ALL | SI468X-FIRMWARE: running application image with audio output | SI468X-AN649: AUDIO_ANALOG_VOLUME (0x0300) / AUDIO_MUTE (0x0301)
     Result setMute(bool left, bool right, uint32_t timeoutUs=1000000UL) {
-        const uint16_t value=(uint16_t)((left?2u:0u)|(right?1u:0u));
+        const uint16_t value=(uint16_t)((left?1u:0u)|(right?2u:0u));
         return setProperty(Property::AUDIO_MUTE,value,timeoutUs);
     }
+    // SI468X-API: setInterruptEnable | SI468X-SUPPORT: ALL | SI468X-FIRMWARE: running application image | SI468X-AN649: INT_CTL_ENABLE (0x0000) / INT_CTL_REPEAT (0x0001)
     Result setInterruptEnable(uint16_t mask, uint32_t timeoutUs=1000000UL) {
         return setProperty(Property::INT_CTL_ENABLE,mask,timeoutUs);
     }
+    // SI468X-API: setInterruptRepeat | SI468X-SUPPORT: ALL | SI468X-FIRMWARE: running application image | SI468X-AN649: INT_CTL_ENABLE (0x0000) / INT_CTL_REPEAT (0x0001)
     Result setInterruptRepeat(uint16_t mask, uint32_t timeoutUs=1000000UL) {
         return setProperty(Property::INT_CTL_REPEAT,mask,timeoutUs);
     }
+    // SI468X-API: setDigitalServiceInterruptSource | SI468X-SUPPORT: ALL | SI468X-FIRMWARE: DAB/DAB+ or HD data-service image | SI468X-AN649: DIGITAL_SERVICE_INT_SOURCE (0x8100)
     Result setDigitalServiceInterruptSource(uint16_t mask, uint32_t timeoutUs=1000000UL) {
         return setProperty(Property::DIGITAL_SERVICE_INT_SOURCE,mask,timeoutUs);
     }
 
     /* Generic raw access: every command in Command and every future numeric CMD. */
+    // SI468X-API: executeRaw | SI468X-SUPPORT: ALL | SI468X-FIRMWARE: caller-defined; device/firmware response is authoritative | SI468X-AN649: raw command access
     Result executeRaw(uint8_t command, const uint8_t* args, uint16_t argLength,
                       uint8_t* reply=0, uint16_t replyLength=0,
                       uint32_t timeoutUs=1000000UL) {
@@ -1059,6 +1286,7 @@ public:
     // Core / bootloader commands
     // -------------------------------------------------------------------------
 
+    // SI468X-API: powerUp | SI468X-SUPPORT: ALL | SI468X-FIRMWARE: bootloader / boot transition | SI468X-AN649: POWER_UP / LOAD_INIT / BOOT
     Result powerUp(const PowerUpConfig& c, uint32_t timeoutUs=1000000UL) {
         uint8_t a[15]; memset(a,0,sizeof(a));
         a[0] = c.ctsInterruptEnable ? 0x80u : 0u;
@@ -1073,27 +1301,39 @@ public:
         return r;
     }
 
+    // SI468X-API: loadInit | SI468X-SUPPORT: ALL | SI468X-FIRMWARE: bootloader / boot transition | SI468X-AN649: POWER_UP / LOAD_INIT / BOOT
     Result loadInit(uint32_t timeoutUs=1000000UL) {
         const uint8_t a[1]={0}; return executeCommand(Command::LOAD_INIT,a,1,0,0,timeoutUs);
     }
+    // SI468X-API: boot | SI468X-SUPPORT: ALL | SI468X-FIRMWARE: bootloader / boot transition | SI468X-AN649: POWER_UP / LOAD_INIT / BOOT
     Result boot(uint32_t timeoutUs=1000000UL) {
         const uint8_t a[1]={0}; return executeCommand(Command::BOOT,a,1,0,0,timeoutUs);
     }
 
+    // SI468X-API: getPartInfo | SI468X-SUPPORT: ALL | SI468X-FIRMWARE: supported firmware/boot revisions; AN649 notes A0A limitation | SI468X-AN649: GET_PART_INFO (0x08)
     Result getPartInfo(PartInfo& out, uint32_t timeoutUs=1000000UL) {
         uint8_t a[1]={0}, r[23];
         Result x=executeCommand(Command::GET_PART_INFO,a,1,r,sizeof(r),timeoutUs);
         if (x!=Result::Ok) return x;
-        out.chipRevision=r[4]; out.romId=r[5]; out.partNumber=readLe16(r+8); return Result::Ok;
+        out.chipRevision=r[4]; out.romId=r[5]; out.partNumber=readLe16(r+8);
+        switch (out.partNumber) {
+            case 4682: _detectedPart=Part::Si4682; break; case 4683: _detectedPart=Part::Si4683; break;
+            case 4684: _detectedPart=Part::Si4684; break; case 4685: _detectedPart=Part::Si4685; break;
+            case 4688: _detectedPart=Part::Si4688; break; case 4689: _detectedPart=Part::Si4689; break;
+            default: _detectedPart=Part::Unknown; break;
+        }
+        return Result::Ok;
     }
 
+    // SI468X-API: getSystemState | SI468X-SUPPORT: ALL | SI468X-FIRMWARE: supported firmware revisions; AN649 notes A0A limitation | SI468X-AN649: GET_SYS_STATE (0x09)
     Result getSystemState(SystemState& out, uint32_t timeoutUs=1000000UL) {
         uint8_t a[1]={0}, r[6];
         Result x=executeCommand(Command::GET_SYS_STATE,a,1,r,sizeof(r),timeoutUs);
         if (x!=Result::Ok) return x;
-        parseStatus(r,sizeof(r),out.status); out.image=(Image)r[4]; return Result::Ok;
+        parseStatus(r,sizeof(r),out.status); out.image=(Image)r[4]; _activeImage=out.image; return Result::Ok;
     }
 
+    // SI468X-API: getFunctionInfo | SI468X-SUPPORT: ALL | SI468X-FIRMWARE: running application image | SI468X-AN649: GET_FUNC_INFO (0x12)
     Result getFunctionInfo(FunctionInfo& out, uint32_t timeoutUs=1000000UL) {
         uint8_t a[1]={0}, r[12];
         Result x=executeCommand(Command::GET_FUNC_INFO,a,1,r,sizeof(r),timeoutUs);
@@ -1102,6 +1342,7 @@ public:
         return Result::Ok;
     }
 
+    // SI468X-API: getPowerUpArgs | SI468X-SUPPORT: ALL | SI468X-FIRMWARE: booted/powered device as supported by image | SI468X-AN649: GET_POWER_UP_ARGS (0x0A)
     Result getPowerUpArgs(PowerUpArgs& out, uint32_t timeoutUs=1000000UL) {
         uint8_t a[1]={0}, r[18];
         Result x=executeCommand(Command::GET_POWER_UP_ARGS,a,1,r,sizeof(r),timeoutUs);
@@ -1112,25 +1353,30 @@ public:
         return Result::Ok;
     }
 
+    // SI468X-API: setProperty | SI468X-SUPPORT: ALL | SI468X-FIRMWARE: depends on the selected Property and active image | SI468X-AN649: SET_PROPERTY (0x13) / GET_PROPERTY (0x14)
     Result setProperty(uint16_t property, uint16_t value, uint32_t timeoutUs=1000000UL) {
         uint8_t a[5]; a[0]=0; writeLe16(a+1,property); writeLe16(a+3,value);
         return executeCommand(Command::SET_PROPERTY,a,5,0,0,timeoutUs);
     }
+    // SI468X-API: setProperty | SI468X-SUPPORT: ALL | SI468X-FIRMWARE: depends on the selected Property and active image | SI468X-AN649: SET_PROPERTY (0x13) / GET_PROPERTY (0x14)
     Result setProperty(Property property, uint16_t value, uint32_t timeoutUs=1000000UL) {
         return setProperty((uint16_t)property,value,timeoutUs);
     }
 
+    // SI468X-API: getProperty | SI468X-SUPPORT: ALL | SI468X-FIRMWARE: depends on the selected Property and active image | SI468X-AN649: SET_PROPERTY (0x13) / GET_PROPERTY (0x14)
     Result getProperty(uint16_t property, uint16_t& value, uint32_t timeoutUs=1000000UL) {
         uint8_t a[3]; a[0]=1; writeLe16(a+1,property); uint8_t r[6];
         Result x=executeCommand(Command::GET_PROPERTY,a,3,r,sizeof(r),timeoutUs);
         if (x==Result::Ok) value=readLe16(r+4);
         return x;
     }
+    // SI468X-API: getProperty | SI468X-SUPPORT: ALL | SI468X-FIRMWARE: depends on the selected Property and active image | SI468X-AN649: SET_PROPERTY (0x13) / GET_PROPERTY (0x14)
     Result getProperty(Property property, uint16_t& value, uint32_t timeoutUs=1000000UL) {
         return getProperty((uint16_t)property,value,timeoutUs);
     }
 
     /* READ_OFFSET returns 4 status bytes followed by up to `dataLength` bytes. */
+    // SI468X-API: readOffset | SI468X-SUPPORT: ALL | SI468X-FIRMWARE: image/boot revision supporting READ_OFFSET | SI468X-AN649: READ_OFFSET (0x10)
     Result readOffset(uint16_t offset, uint8_t* reply, uint16_t dataLength,
                       uint32_t timeoutUs=1000000UL) {
         if ((offset & 3u) != 0 || !reply) return Result::InvalidArgument;
@@ -1138,6 +1384,7 @@ public:
         return executeCommand(Command::READ_OFFSET,a,3,reply,(uint16_t)(dataLength+4u),timeoutUs);
     }
 
+    // SI468X-API: writeStorage | SI468X-SUPPORT: ALL | SI468X-FIRMWARE: image supporting storage commands | SI468X-AN649: WRITE_STORAGE (0x15) / READ_STORAGE (0x16)
     Result writeStorage(uint16_t offset, const uint8_t* data, uint16_t length,
                         uint32_t timeoutUs=1000000UL) {
         if (!data || !length || length>256u) return Result::InvalidArgument;
@@ -1147,6 +1394,7 @@ public:
         return executeCommand(Command::WRITE_STORAGE,_workspace,(uint16_t)(length+7u),0,0,timeoutUs);
     }
 
+    // SI468X-API: readStorage | SI468X-SUPPORT: ALL | SI468X-FIRMWARE: image supporting storage commands | SI468X-AN649: WRITE_STORAGE (0x15) / READ_STORAGE (0x16)
     Result readStorage(uint16_t offset, uint8_t* reply, uint16_t replyLength,
                        uint32_t timeoutUs=1000000UL) {
         if (!reply || replyLength<5) return Result::InvalidArgument;
@@ -1159,6 +1407,7 @@ public:
     // by an ImageReader; this library has no dependency on any firmware package.
     // -------------------------------------------------------------------------
 
+    // SI468X-API: hostLoadImage | SI468X-SUPPORT: ALL | SI468X-FIRMWARE: bootloader; A10 requires appropriate boot patch before application boot | SI468X-AN649: HOST_LOAD / FLASH_LOAD boot flows
     Result hostLoadImage(ImageReader reader, void* readerContext, uint32_t imageSize,
                          uint32_t timeoutPerChunkUs=1000000UL) {
         if (!reader || !imageSize) return Result::InvalidArgument;
@@ -1182,6 +1431,7 @@ public:
         return Result::Ok;
     }
 
+    // SI468X-API: bootHostImage | SI468X-SUPPORT: ALL | SI468X-FIRMWARE: bootloader; A10 requires appropriate boot patch before application boot | SI468X-AN649: HOST_LOAD / FLASH_LOAD boot flows
     Result bootHostImage(const PowerUpConfig& cfg,
                          ImageReader patchReader, void* patchContext, uint32_t patchSize,
                          ImageReader imageReader, void* imageContext, uint32_t imageSize,
@@ -1195,6 +1445,7 @@ public:
         return boot(timeoutPerCommandUs);
     }
 
+    // SI468X-API: bootNvspiWithHostFullPatch | SI468X-SUPPORT: ALL | SI468X-FIRMWARE: bootloader; A10 requires appropriate boot patch before application boot | SI468X-AN649: HOST_LOAD / FLASH_LOAD boot flows
     Result bootNvspiWithHostFullPatch(const PowerUpConfig& cfg,
                                       ImageReader fullPatchReader, void* patchContext, uint32_t patchSize,
                                       uint32_t firmwareFlashAddress,
@@ -1208,6 +1459,7 @@ public:
         return boot(timeoutPerCommandUs);
     }
 
+    // SI468X-API: bootNvspiWithMiniPatch | SI468X-SUPPORT: ALL | SI468X-FIRMWARE: bootloader; A10 requires appropriate boot patch before application boot | SI468X-AN649: HOST_LOAD / FLASH_LOAD boot flows
     Result bootNvspiWithMiniPatch(const PowerUpConfig& cfg,
                                   ImageReader miniPatchReader, void* miniContext, uint32_t miniPatchSize,
                                   uint32_t fullPatchFlashAddress, uint32_t firmwareFlashAddress,
@@ -1224,6 +1476,11 @@ public:
     }
 
     // -------------------------------------------------------------------------
+    // FM / FMHD PUBLIC API
+    // SI468X-SUPPORT: Si4682 Si4683 Si4684 Si4685 Si4688 Si4689
+    // SI468X-FIRMWARE: FM/FMHD
+    // Every public method below also carries a local SI468X-API support tag.
+    // -------------------------------------------------------------------------
     // FM/FMHD typed command helpers.
     // -------------------------------------------------------------------------
 
@@ -1232,6 +1489,7 @@ public:
      * service() completes the CTS phase. RF acquisition/tune completion is a
      * separate STC event; use INTB/status handling or waitForStc() if required.
      */
+    // SI468X-API: startFmTune | SI468X-SUPPORT: Si4682 Si4683 Si4684 Si4685 Si4688 Si4689 | SI468X-FIRMWARE: FM/FMHD | SI468X-AN649: FM command set (0x30..0x33)
     Result startFmTune(uint16_t frequency10kHz, TuneMode mode=TuneMode::AnalogOnly,
                        Injection injection=Injection::Automatic, uint16_t antennaCap=0,
                        uint8_t programId=0, bool dirTune=false, uint32_t timeoutUs=1000000UL) {
@@ -1241,6 +1499,7 @@ public:
         return startCommand(Command::FM_TUNE_FREQ,a,6,0,0,timeoutUs);
     }
 
+    // SI468X-API: startFmSeek | SI468X-SUPPORT: Si4682 Si4683 Si4684 Si4685 Si4688 Si4689 | SI468X-FIRMWARE: FM/FMHD | SI468X-AN649: FM command set (0x30..0x33)
     Result startFmSeek(bool up, bool wrap, TuneMode mode=TuneMode::AnalogOnly,
                        Injection injection=Injection::Automatic, uint16_t antennaCap=0,
                        bool forceWideband=false, uint32_t timeoutUs=1000000UL) {
@@ -1254,6 +1513,7 @@ public:
      * Blocking convenience wrapper. It waits only until the command reaches CTS;
      * it does NOT wait for the later STC tune-complete event.
      */
+    // SI468X-API: fmTune | SI468X-SUPPORT: Si4682 Si4683 Si4684 Si4685 Si4688 Si4689 | SI468X-FIRMWARE: FM/FMHD | SI468X-AN649: FM command set (0x30..0x33)
     Result fmTune(uint16_t frequency10kHz, TuneMode mode=TuneMode::AnalogOnly,
                   Injection injection=Injection::Automatic, uint16_t antennaCap=0,
                   uint8_t programId=0, bool dirTune=false, uint32_t timeoutUs=1000000UL) {
@@ -1263,6 +1523,7 @@ public:
         return executeCommand(Command::FM_TUNE_FREQ,a,6,0,0,timeoutUs);
     }
 
+    // SI468X-API: fmSeek | SI468X-SUPPORT: Si4682 Si4683 Si4684 Si4685 Si4688 Si4689 | SI468X-FIRMWARE: FM/FMHD | SI468X-AN649: FM command set (0x30..0x33)
     Result fmSeek(bool up, bool wrap, TuneMode mode=TuneMode::AnalogOnly,
                   Injection injection=Injection::Automatic, uint16_t antennaCap=0,
                   bool forceWideband=false, uint32_t timeoutUs=1000000UL) {
@@ -1272,6 +1533,7 @@ public:
         return executeCommand(Command::FM_SEEK_START,a,5,0,0,timeoutUs);
     }
 
+    // SI468X-API: fmRsqStatus | SI468X-SUPPORT: Si4682 Si4683 Si4684 Si4685 Si4688 Si4689 | SI468X-FIRMWARE: FM/FMHD | SI468X-AN649: FM command set (0x30..0x33)
     Result fmRsqStatus(FmRsqStatus& out, bool rsqAck=false, bool attune=false,
                        bool cancel=false, bool stcAck=false, uint32_t timeoutUs=1000000UL) {
         uint8_t a[1]={(uint8_t)((rsqAck?8u:0u)|(attune?4u:0u)|(cancel?2u:0u)|(stcAck?1u:0u))};
@@ -1280,6 +1542,7 @@ public:
         return parseFmRsqStatus(r,sizeof(r),out);
     }
 
+    // SI468X-API: fmAcfStatus | SI468X-SUPPORT: Si4682 Si4683 Si4684 Si4685 Si4688 Si4689 | SI468X-FIRMWARE: FM/FMHD | SI468X-AN649: FM command set (0x30..0x33)
     Result fmAcfStatus(FmAcfStatus& out, bool ack=false, uint32_t timeoutUs=1000000UL) {
         uint8_t a[1]={(uint8_t)(ack?1u:0u)}; uint8_t r[10];
         Result x=executeCommand(Command::FM_ACF_STATUS,a,1,r,sizeof(r),timeoutUs);
@@ -1287,6 +1550,7 @@ public:
         return parseFmAcfStatus(r,sizeof(r),out);
     }
 
+    // SI468X-API: fmRdsStatus | SI468X-SUPPORT: Si4682 Si4683 Si4684 Si4685 Si4688 Si4689 | SI468X-FIRMWARE: FM/FMHD with RDS enabled/configured | SI468X-AN649: FM_RDS_STATUS (0x34) / FM_RDS_BLOCKCOUNT (0x35)
     Result fmRdsStatus(FmRdsGroup& out, bool statusOnly=false, bool clearFifo=false,
                        bool interruptAck=false, uint32_t timeoutUs=1000000UL) {
         uint8_t a[1]={(uint8_t)((statusOnly?4u:0u)|(clearFifo?2u:0u)|(interruptAck?1u:0u))};
@@ -1295,6 +1559,7 @@ public:
         return parseFmRdsStatus(r,sizeof(r),out);
     }
 
+    // SI468X-API: fmRdsBlockCount | SI468X-SUPPORT: Si4682 Si4683 Si4684 Si4685 Si4688 Si4689 | SI468X-FIRMWARE: FM/FMHD with RDS enabled/configured | SI468X-AN649: FM_RDS_STATUS (0x34) / FM_RDS_BLOCKCOUNT (0x35)
     Result fmRdsBlockCount(FmRdsBlockCount& out, bool clear=false,
                            uint32_t timeoutUs=1000000UL) {
         uint8_t a[1]={(uint8_t)(clear?1u:0u)}; uint8_t r[10];
@@ -1306,9 +1571,14 @@ public:
     }
 
     // -------------------------------------------------------------------------
+    // AM / AMHD PUBLIC API
+    // SI468X-SUPPORT: Si4683 Si4685 Si4689
+    // SI468X-FIRMWARE: AM/AMHD
+    // -------------------------------------------------------------------------
     // AM/AMHD typed command helpers.
     // -------------------------------------------------------------------------
 
+    // SI468X-API: startAmTune | SI468X-SUPPORT: Si4683 Si4685 Si4689 | SI468X-FIRMWARE: AM/AMHD | SI468X-AN649: AM command set (0x40..0x43)
     Result startAmTune(uint16_t frequencyKHz, TuneMode mode=TuneMode::AnalogOnly,
                        Injection injection=Injection::Automatic, uint16_t antennaCap=0,
                        uint32_t timeoutUs=1000000UL) {
@@ -1317,6 +1587,7 @@ public:
         return startCommand(Command::AM_TUNE_FREQ,a,5,0,0,timeoutUs);
     }
 
+    // SI468X-API: startAmSeek | SI468X-SUPPORT: Si4683 Si4685 Si4689 | SI468X-FIRMWARE: AM/AMHD | SI468X-AN649: AM command set (0x40..0x43)
     Result startAmSeek(bool up, bool wrap, TuneMode mode=TuneMode::AnalogOnly,
                        Injection injection=Injection::Automatic, uint16_t antennaCap=0,
                        bool forceWideband=false, uint32_t timeoutUs=1000000UL) {
@@ -1325,6 +1596,7 @@ public:
         return startCommand(Command::AM_SEEK_START,a,5,0,0,timeoutUs);
     }
 
+    // SI468X-API: amTune | SI468X-SUPPORT: Si4683 Si4685 Si4689 | SI468X-FIRMWARE: AM/AMHD | SI468X-AN649: AM command set (0x40..0x43)
     Result amTune(uint16_t frequencyKHz, TuneMode mode=TuneMode::AnalogOnly,
                   Injection injection=Injection::Automatic, uint16_t antennaCap=0,
                   uint32_t timeoutUs=1000000UL) {
@@ -1333,6 +1605,7 @@ public:
         return executeCommand(Command::AM_TUNE_FREQ,a,5,0,0,timeoutUs);
     }
 
+    // SI468X-API: amSeek | SI468X-SUPPORT: Si4683 Si4685 Si4689 | SI468X-FIRMWARE: AM/AMHD | SI468X-AN649: AM command set (0x40..0x43)
     Result amSeek(bool up, bool wrap, TuneMode mode=TuneMode::AnalogOnly,
                   Injection injection=Injection::Automatic, uint16_t antennaCap=0,
                   bool forceWideband=false, uint32_t timeoutUs=1000000UL) {
@@ -1341,6 +1614,7 @@ public:
         return executeCommand(Command::AM_SEEK_START,a,5,0,0,timeoutUs);
     }
 
+    // SI468X-API: amRsqStatus | SI468X-SUPPORT: Si4683 Si4685 Si4689 | SI468X-FIRMWARE: AM/AMHD | SI468X-AN649: AM command set (0x40..0x43)
     Result amRsqStatus(AmRsqStatus& out, bool rsqAck=false, bool attune=false,
                        bool cancel=false, bool stcAck=false, uint32_t timeoutUs=1000000UL) {
         uint8_t a[1]={(uint8_t)((rsqAck?8u:0u)|(attune?4u:0u)|(cancel?2u:0u)|(stcAck?1u:0u))};
@@ -1349,6 +1623,7 @@ public:
         return parseAmRsqStatus(r,sizeof(r),out);
     }
 
+    // SI468X-API: amAcfStatus | SI468X-SUPPORT: Si4683 Si4685 Si4689 | SI468X-FIRMWARE: AM/AMHD | SI468X-AN649: AM command set (0x40..0x43)
     Result amAcfStatus(AmAcfStatus& out, bool ack=false, uint32_t timeoutUs=1000000UL) {
         uint8_t a[1]={(uint8_t)(ack?1u:0u)}; uint8_t r[9];
         Result x=executeCommand(Command::AM_ACF_STATUS,a,1,r,sizeof(r),timeoutUs);
@@ -1357,9 +1632,14 @@ public:
     }
 
     // -------------------------------------------------------------------------
+    // DAB / DAB+ PUBLIC API
+    // SI468X-SUPPORT: Si4684 Si4685 Si4688 Si4689
+    // SI468X-FIRMWARE: DAB/DAB+
+    // -------------------------------------------------------------------------
     // DAB/DAB+ typed command helpers.
     // -------------------------------------------------------------------------
 
+    // SI468X-API: startDabTune | SI468X-SUPPORT: Si4684 Si4685 Si4688 Si4689 | SI468X-FIRMWARE: DAB/DAB+ | SI468X-AN649: DAB tune/status command set
     Result startDabTune(uint8_t frequencyIndex, Injection injection=Injection::Automatic,
                         uint16_t antennaCap=0, uint32_t timeoutUs=1000000UL) {
         uint8_t a[5]; a[0]=(uint8_t)((uint8_t)injection&3u); a[1]=frequencyIndex; a[2]=0;
@@ -1367,6 +1647,7 @@ public:
         return startCommand(Command::DAB_TUNE_FREQ,a,5,0,0,timeoutUs);
     }
 
+    // SI468X-API: dabTune | SI468X-SUPPORT: Si4684 Si4685 Si4688 Si4689 | SI468X-FIRMWARE: DAB/DAB+ | SI468X-AN649: DAB tune/status command set
     Result dabTune(uint8_t frequencyIndex, Injection injection=Injection::Automatic,
                    uint16_t antennaCap=0, uint32_t timeoutUs=1000000UL) {
         uint8_t a[5]; a[0]=(uint8_t)((uint8_t)injection&3u); a[1]=frequencyIndex; a[2]=0;
@@ -1374,6 +1655,7 @@ public:
         return executeCommand(Command::DAB_TUNE_FREQ,a,5,0,0,timeoutUs);
     }
 
+    // SI468X-API: dabDigradStatus | SI468X-SUPPORT: Si4684 Si4685 Si4688 Si4689 | SI468X-FIRMWARE: DAB/DAB+ | SI468X-AN649: DAB tune/status command set
     Result dabDigradStatus(DabDigradStatus& out, bool ack=false, bool attune=false,
                            bool stcAck=false, uint32_t timeoutUs=1000000UL) {
         uint8_t a[1]={(uint8_t)((ack?8u:0u)|(attune?4u:0u)|(stcAck?1u:0u))};
@@ -1382,6 +1664,7 @@ public:
         return parseDabDigradStatus(r,sizeof(r),out);
     }
 
+    // SI468X-API: dabSetFrequencyList | SI468X-SUPPORT: Si4684 Si4685 Si4688 Si4689 | SI468X-FIRMWARE: DAB/DAB+ | SI468X-AN649: DAB tune/status command set
     Result dabSetFrequencyList(const uint32_t* frequencyKHz, uint8_t count,
                                uint32_t timeoutUs=1000000UL) {
         if (!frequencyKHz || !count) return Result::InvalidArgument;
@@ -1402,24 +1685,49 @@ public:
      * HD Radio: SERTYPE selects audio (0) or data (1). HD service/program/port
      * semantics are defined by the HD API references cited by AN649.
      */
+    // SI468X-API: startDigitalService | SI468X-SUPPORT: ALL | SI468X-FIRMWARE: DAB/DAB+ or HD-capable FMHD/AMHD image | SI468X-AN649: digital service transport (0x80..0x84)
     Result startDigitalService(uint8_t serviceType, uint32_t serviceId, uint32_t componentId,
                                uint32_t timeoutUs=1000000UL) {
         if (serviceType>1u) return Result::InvalidArgument;
         uint8_t a[11]; a[0]=serviceType; a[1]=a[2]=0; writeLe32(a+3,serviceId); writeLe32(a+7,componentId);
         return executeCommand(Command::START_DIGITAL_SERVICE,a,11,0,0,timeoutUs);
     }
+    // SI468X-API: stopDigitalService | SI468X-SUPPORT: ALL | SI468X-FIRMWARE: DAB/DAB+ or HD-capable FMHD/AMHD image | SI468X-AN649: digital service transport (0x80..0x84)
     Result stopDigitalService(uint8_t serviceType, uint32_t serviceId, uint32_t componentId,
                               uint32_t timeoutUs=1000000UL) {
         if (serviceType>1u) return Result::InvalidArgument;
         uint8_t a[11]; a[0]=serviceType; a[1]=a[2]=0; writeLe32(a+3,serviceId); writeLe32(a+7,componentId);
         return executeCommand(Command::STOP_DIGITAL_SERVICE,a,11,0,0,timeoutUs);
     }
+    // SI468X-API: startDabService | SI468X-SUPPORT: Si4684 Si4685 Si4688 Si4689 | SI468X-FIRMWARE: DAB/DAB+ | SI468X-AN649: DAB service helper over digital-service commands
     Result startDabService(uint32_t serviceId, uint32_t componentId, uint32_t timeoutUs=1000000UL) {
         return startDigitalService(0,serviceId,componentId,timeoutUs);
     }
+    // SI468X-API: stopDabService | SI468X-SUPPORT: Si4684 Si4685 Si4688 Si4689 | SI468X-FIRMWARE: DAB/DAB+ | SI468X-AN649: DAB service helper over digital-service commands
     Result stopDabService(uint32_t serviceId, uint32_t componentId, uint32_t timeoutUs=1000000UL) {
         return stopDigitalService(0,serviceId,componentId,timeoutUs);
     }
+
+    /* Tune an ensemble and start the selected DAB component. */
+    // SI468X-API: dabTuneService | SI468X-SUPPORT: Si4684 Si4685 Si4688 Si4689 | SI468X-FIRMWARE: DAB/DAB+ | SI468X-AN649: DAB service helper over digital-service commands
+    Result dabTuneService(uint8_t frequencyIndex, uint32_t serviceId, uint32_t componentId,
+                          Injection injection=Injection::Automatic, uint16_t antennaCap=0,
+                          uint32_t tuneTimeoutUs=3000000UL, uint32_t commandTimeoutUs=1000000UL) {
+        Result r=dabTune(frequencyIndex,injection,antennaCap,commandTimeoutUs);
+        if (r!=Result::Ok) return r;
+        Status st; r=waitForStc(st,tuneTimeoutUs);
+        if (r!=Result::Ok) return r;
+        return startDabService(serviceId,componentId,commandTimeoutUs);
+    }
+
+    /*
+     * Retrieve and stream the complete DAB service list through READ_OFFSET.
+     * The caller controls RAM usage only by the workspace supplied to Si468x.
+     * The parser itself needs only a small fixed record buffer.
+     */
+    // SI468X-API: readDabServiceList | SI468X-SUPPORT: Si4684 Si4685 Si4688 Si4689 | SI468X-FIRMWARE: DAB/DAB+ | SI468X-AN649: DAB service helper over digital-service commands
+    Result readDabServiceList(DabServiceListParser& parser, uint16_t preferredChunk=0,
+                              uint32_t timeoutUs=1000000UL);
 
     /*
      * Request a digital service list. SERTYPE is a two-bit field in AN649:
@@ -1431,6 +1739,7 @@ public:
      * specified by external HD Radio documents, therefore this method keeps
      * the response raw.
      */
+    // SI468X-API: getDigitalServiceList | SI468X-SUPPORT: ALL | SI468X-FIRMWARE: DAB/DAB+ or HD-capable FMHD/AMHD image | SI468X-AN649: digital service transport (0x80..0x84)
     Result getDigitalServiceList(uint8_t serviceType, uint8_t* reply, uint16_t replyLength,
                                  uint32_t timeoutUs=1000000UL) {
         if (serviceType>3u) return Result::InvalidArgument;
@@ -1443,6 +1752,7 @@ public:
      * first call getDigitalServiceDataHeader() and then retrieve the preserved
      * response in chunks with READ_OFFSET instead of allocating the full block.
      */
+    // SI468X-API: getDigitalServiceData | SI468X-SUPPORT: ALL | SI468X-FIRMWARE: DAB/DAB+ or HD-capable FMHD/AMHD image | SI468X-AN649: digital service transport (0x80..0x84)
     Result getDigitalServiceData(bool statusOnly, bool ack, uint8_t* reply, uint16_t replyLength,
                                  uint32_t timeoutUs=1000000UL) {
         if (!reply || replyLength<4u) return Result::InvalidArgument;
@@ -1451,6 +1761,7 @@ public:
     }
 
     /* Header-first DSRV read. The caller may then re-read the full current reply. */
+    // SI468X-API: getDigitalServiceDataHeader | SI468X-SUPPORT: ALL | SI468X-FIRMWARE: DAB/DAB+ or HD-capable FMHD/AMHD image | SI468X-AN649: digital service transport (0x80..0x84)
     Result getDigitalServiceDataHeader(DsrvHeader& header, bool statusOnly=false, bool ack=true,
                                        uint32_t timeoutUs=1000000UL) {
         uint8_t a[1]={(uint8_t)((statusOnly?0x10u:0u)|(ack?1u:0u))};
@@ -1460,56 +1771,68 @@ public:
     }
 
     /* Raw DAB information commands. Their complete replies are passed untouched. */
+    // SI468X-API: dabGetEventStatus | SI468X-SUPPORT: Si4684 Si4685 Si4688 Si4689 | SI468X-FIRMWARE: DAB/DAB+ | SI468X-AN649: DAB command set (0xB3..0xE8 as applicable)
     Result dabGetEventStatus(DabEventStatus& out, bool ack=false, uint32_t timeoutUs=1000000UL) {
         uint8_t a[1]={(uint8_t)(ack?1u:0u)}, r[8];
         Result x=executeCommand(Command::DAB_GET_EVENT_STATUS,a,1,r,sizeof(r),timeoutUs);
         if (x!=Result::Ok) return x;
         return parseDabEventStatus(r,sizeof(r),out);
     }
+    // SI468X-API: dabGetEventStatusRaw | SI468X-SUPPORT: Si4684 Si4685 Si4688 Si4689 | SI468X-FIRMWARE: DAB/DAB+ | SI468X-AN649: DAB command set (0xB3..0xE8 as applicable)
     Result dabGetEventStatusRaw(uint8_t arg1, uint8_t* reply, uint16_t replyLength, uint32_t timeoutUs=1000000UL) {
         return executeCommand(Command::DAB_GET_EVENT_STATUS,&arg1,1,reply,replyLength,timeoutUs);
     }
+    // SI468X-API: dabGetEnsembleInfo | SI468X-SUPPORT: Si4684 Si4685 Si4688 Si4689 | SI468X-FIRMWARE: DAB/DAB+ | SI468X-AN649: DAB command set (0xB3..0xE8 as applicable)
     Result dabGetEnsembleInfo(DabEnsembleInfo& out, uint32_t timeoutUs=1000000UL) {
         const uint8_t a[1]={0}; uint8_t r[26];
         Result x=executeCommand(Command::DAB_GET_ENSEMBLE_INFO,a,1,r,sizeof(r),timeoutUs);
         if (x!=Result::Ok) return x;
         return parseDabEnsembleInfo(r,sizeof(r),out);
     }
+    // SI468X-API: dabGetEnsembleInfoRaw | SI468X-SUPPORT: Si4684 Si4685 Si4688 Si4689 | SI468X-FIRMWARE: DAB/DAB+ | SI468X-AN649: DAB command set (0xB3..0xE8 as applicable)
     Result dabGetEnsembleInfoRaw(uint8_t* reply, uint16_t replyLength, uint32_t timeoutUs=1000000UL) {
         const uint8_t a[1]={0}; return executeCommand(Command::DAB_GET_ENSEMBLE_INFO,a,1,reply,replyLength,timeoutUs);
     }
+    // SI468X-API: dabGetServiceLinkingInfo | SI468X-SUPPORT: Si4684 Si4685 Si4688 Si4689 | SI468X-FIRMWARE: DAB/DAB+ | SI468X-AN649: DAB command set (0xB3..0xE8 as applicable)
     Result dabGetServiceLinkingInfo(uint32_t serviceId, uint8_t* reply, uint16_t replyLength,
                                     uint32_t timeoutUs=1000000UL) {
         uint8_t a[7]={0,0,0,0,0,0,0}; writeLe32(a+3,serviceId);
         return executeCommand(Command::DAB_GET_SERVICE_LINKING_INFO,a,7,reply,replyLength,timeoutUs);
     }
+    // SI468X-API: dabGetFrequencyList | SI468X-SUPPORT: Si4684 Si4685 Si4688 Si4689 | SI468X-FIRMWARE: DAB/DAB+ | SI468X-AN649: DAB command set (0xB3..0xE8 as applicable)
     Result dabGetFrequencyList(uint8_t* reply, uint16_t replyLength, uint32_t timeoutUs=1000000UL) {
         const uint8_t a[1]={0}; return executeCommand(Command::DAB_GET_FREQ_LIST,a,1,reply,replyLength,timeoutUs);
     }
+    // SI468X-API: dabGetComponentInfo | SI468X-SUPPORT: Si4684 Si4685 Si4688 Si4689 | SI468X-FIRMWARE: DAB/DAB+ | SI468X-AN649: DAB command set (0xB3..0xE8 as applicable)
     Result dabGetComponentInfo(uint32_t serviceId, uint32_t componentId, uint8_t* reply, uint16_t replyLength,
                                uint32_t timeoutUs=1000000UL) {
         uint8_t a[11]; a[0]=a[1]=a[2]=0; writeLe32(a+3,serviceId); writeLe32(a+7,componentId);
         return executeCommand(Command::DAB_GET_COMPONENT_INFO,a,11,reply,replyLength,timeoutUs);
     }
+    // SI468X-API: dabGetTime | SI468X-SUPPORT: Si4684 Si4685 Si4688 Si4689 | SI468X-FIRMWARE: DAB/DAB+ | SI468X-AN649: DAB command set (0xB3..0xE8 as applicable)
     Result dabGetTime(uint8_t timeType, DabTimeInfo& out, uint32_t timeoutUs=1000000UL) {
         if (timeType > 1u) return Result::InvalidArgument;
         uint8_t r[11]; Result x=executeCommand(Command::DAB_GET_TIME,&timeType,1,r,sizeof(r),timeoutUs);
         if (x!=Result::Ok) return x;
         return parseDabTime(r,sizeof(r),out);
     }
+    // SI468X-API: dabGetTimeRaw | SI468X-SUPPORT: Si4684 Si4685 Si4688 Si4689 | SI468X-FIRMWARE: DAB/DAB+ | SI468X-AN649: DAB command set (0xB3..0xE8 as applicable)
     Result dabGetTimeRaw(uint8_t timeType, uint8_t* reply, uint16_t replyLength, uint32_t timeoutUs=1000000UL) {
         if (timeType > 1u) return Result::InvalidArgument;
         return executeCommand(Command::DAB_GET_TIME,&timeType,1,reply,replyLength,timeoutUs);
     }
+    // SI468X-API: dabGetAudioInfo | SI468X-SUPPORT: Si4684 Si4685 Si4688 Si4689 | SI468X-FIRMWARE: DAB/DAB+ | SI468X-AN649: DAB command set (0xB3..0xE8 as applicable)
     Result dabGetAudioInfo(DabAudioInfo& out, uint32_t timeoutUs=1000000UL) {
         const uint8_t a[1]={0}; uint8_t r[10];
         Result x=executeCommand(Command::DAB_GET_AUDIO_INFO,a,1,r,sizeof(r),timeoutUs);
         if (x!=Result::Ok) return x;
         return parseDabAudioInfo(r,sizeof(r),out);
     }
+    // SI468X-API: dabGetAudioInfoRaw | SI468X-SUPPORT: Si4684 Si4685 Si4688 Si4689 | SI468X-FIRMWARE: DAB/DAB+ | SI468X-AN649: DAB command set (0xB3..0xE8 as applicable)
     Result dabGetAudioInfoRaw(uint8_t* reply, uint16_t replyLength, uint32_t timeoutUs=1000000UL) {
         const uint8_t a[1]={0}; return executeCommand(Command::DAB_GET_AUDIO_INFO,a,1,reply,replyLength,timeoutUs);
     }
+    // SI468X-API: dabGetSubchannelInfo | SI468X-SUPPORT: Si4684 Si4685 Si4688 Si4689 | SI468X-FIRMWARE: DAB/DAB+ | SI468X-AN649: DAB command set (0xB3..0xE8 as applicable)
     Result dabGetSubchannelInfo(uint32_t serviceId, uint32_t componentId, DabSubchannelInfo& out,
                                 uint32_t timeoutUs=1000000UL) {
         uint8_t a[11], r[12]; a[0]=a[1]=a[2]=0; writeLe32(a+3,serviceId); writeLe32(a+7,componentId);
@@ -1517,25 +1840,30 @@ public:
         if (x!=Result::Ok) return x;
         return parseDabSubchannelInfo(r,sizeof(r),out);
     }
+    // SI468X-API: dabGetSubchannelInfoRaw | SI468X-SUPPORT: Si4684 Si4685 Si4688 Si4689 | SI468X-FIRMWARE: DAB/DAB+ | SI468X-AN649: DAB command set (0xB3..0xE8 as applicable)
     Result dabGetSubchannelInfoRaw(uint32_t serviceId, uint32_t componentId, uint8_t* reply, uint16_t replyLength,
                                    uint32_t timeoutUs=1000000UL) {
         uint8_t a[11]; a[0]=a[1]=a[2]=0; writeLe32(a+3,serviceId); writeLe32(a+7,componentId);
         return executeCommand(Command::DAB_GET_SUBCHAN_INFO,a,11,reply,replyLength,timeoutUs);
     }
+    // SI468X-API: dabGetFrequencyInfo | SI468X-SUPPORT: Si4684 Si4685 Si4688 Si4689 | SI468X-FIRMWARE: DAB/DAB+ | SI468X-AN649: DAB command set (0xB3..0xE8 as applicable)
     Result dabGetFrequencyInfo(uint8_t* reply, uint16_t replyLength, uint32_t timeoutUs=1000000UL) {
         const uint8_t a[1]={0}; return executeCommand(Command::DAB_GET_FREQ_INFO,a,1,reply,replyLength,timeoutUs);
     }
+    // SI468X-API: dabGetServiceInfo | SI468X-SUPPORT: Si4684 Si4685 Si4688 Si4689 | SI468X-FIRMWARE: DAB/DAB+ | SI468X-AN649: DAB command set (0xB3..0xE8 as applicable)
     Result dabGetServiceInfo(uint32_t serviceId, DabServiceInfo& out, uint32_t timeoutUs=1000000UL) {
         uint8_t a[7], r[26]; a[0]=a[1]=a[2]=0; writeLe32(a+3,serviceId);
         Result x=executeCommand(Command::DAB_GET_SERVICE_INFO,a,7,r,sizeof(r),timeoutUs);
         if (x!=Result::Ok) return x;
         return parseDabServiceInfo(r,sizeof(r),out);
     }
+    // SI468X-API: dabGetServiceInfoRaw | SI468X-SUPPORT: Si4684 Si4685 Si4688 Si4689 | SI468X-FIRMWARE: DAB/DAB+ | SI468X-AN649: DAB command set (0xB3..0xE8 as applicable)
     Result dabGetServiceInfoRaw(uint32_t serviceId, uint8_t* reply, uint16_t replyLength,
                                 uint32_t timeoutUs=1000000UL) {
         uint8_t a[7]; a[0]=a[1]=a[2]=0; writeLe32(a+3,serviceId);
         return executeCommand(Command::DAB_GET_SERVICE_INFO,a,7,reply,replyLength,timeoutUs);
     }
+    // SI468X-API: dabTestGetBerInfo | SI468X-SUPPORT: Si4684 Si4685 Si4688 Si4689 | SI468X-FIRMWARE: DAB/DAB+ | SI468X-AN649: DAB command set (0xB3..0xE8 as applicable)
     Result dabTestGetBerInfo(DabBerInfo& out, uint32_t timeoutUs=1000000UL) {
         const uint8_t a[1]={0}; uint8_t r[12];
         Result x=executeCommand(Command::DAB_TEST_GET_BER_INFO,a,1,r,sizeof(r),timeoutUs);
@@ -1545,6 +1873,7 @@ public:
     }
 
     /* Raw overload retained for firmware/test revisions with additional arguments. */
+    // SI468X-API: dabTestGetBerInfo | SI468X-SUPPORT: Si4684 Si4685 Si4688 Si4689 | SI468X-FIRMWARE: DAB/DAB+ | SI468X-AN649: DAB command set (0xB3..0xE8 as applicable)
     Result dabTestGetBerInfo(const uint8_t* args, uint16_t argLength, uint8_t* reply, uint16_t replyLength,
                              uint32_t timeoutUs=1000000UL) {
         return executeCommand(Command::DAB_TEST_GET_BER_INFO,args,argLength,reply,replyLength,timeoutUs);
@@ -1555,25 +1884,35 @@ public:
     // meaning AN649 delegates to iBiquity specifications are intentionally raw.
     // -------------------------------------------------------------------------
 
+    // SI468X-API: hdDigradStatus | SI468X-SUPPORT: Si4682 Si4683 Si4688 Si4689 | SI468X-FIRMWARE: FMHD; AMHD additionally on Si4683/Si4689 where command applies | SI468X-AN649: HD Radio command set (0x92..0x9A)
     Result hdDigradStatus(const uint8_t* args, uint16_t argLength, uint8_t* reply, uint16_t replyLength,
                           uint32_t timeoutUs=1000000UL) { return executeCommand(Command::HD_DIGRAD_STATUS,args,argLength,reply,replyLength,timeoutUs); }
+    // SI468X-API: hdGetEventStatus | SI468X-SUPPORT: Si4682 Si4683 Si4688 Si4689 | SI468X-FIRMWARE: FMHD; AMHD additionally on Si4683/Si4689 where command applies | SI468X-AN649: HD Radio command set (0x92..0x9A)
     Result hdGetEventStatus(const uint8_t* args, uint16_t argLength, uint8_t* reply, uint16_t replyLength,
                             uint32_t timeoutUs=1000000UL) { return executeCommand(Command::HD_GET_EVENT_STATUS,args,argLength,reply,replyLength,timeoutUs); }
+    // SI468X-API: hdGetStationInfo | SI468X-SUPPORT: Si4682 Si4683 Si4688 Si4689 | SI468X-FIRMWARE: FMHD; AMHD additionally on Si4683/Si4689 where command applies | SI468X-AN649: HD Radio command set (0x92..0x9A)
     Result hdGetStationInfo(uint8_t infoSelect, uint8_t* reply, uint16_t replyLength,
                             uint32_t timeoutUs=1000000UL) { return executeCommand(Command::HD_GET_STATION_INFO,&infoSelect,1,reply,replyLength,timeoutUs); }
+    // SI468X-API: hdGetPsdDecode | SI468X-SUPPORT: Si4682 Si4683 Si4688 Si4689 | SI468X-FIRMWARE: FMHD; AMHD additionally on Si4683/Si4689 where command applies | SI468X-AN649: HD Radio command set (0x92..0x9A)
     Result hdGetPsdDecode(uint8_t program, uint8_t field, uint8_t* reply, uint16_t replyLength,
                           uint32_t timeoutUs=1000000UL) { uint8_t a[2]={program,field}; return executeCommand(Command::HD_GET_PSD_DECODE,a,2,reply,replyLength,timeoutUs); }
+    // SI468X-API: hdGetAlertMessage | SI468X-SUPPORT: Si4682 Si4683 Si4688 Si4689 | SI468X-FIRMWARE: FMHD; AMHD additionally on Si4683/Si4689 where command applies | SI468X-AN649: HD Radio command set (0x92..0x9A)
     Result hdGetAlertMessage(const uint8_t* args, uint16_t argLength, uint8_t* reply, uint16_t replyLength,
                              uint32_t timeoutUs=1000000UL) { return executeCommand(Command::HD_GET_ALERT_MSG,args,argLength,reply,replyLength,timeoutUs); }
+    // SI468X-API: hdPlayAlertTone | SI468X-SUPPORT: Si4682 Si4683 Si4688 Si4689 | SI468X-FIRMWARE: FMHD; AMHD additionally on Si4683/Si4689 where command applies | SI468X-AN649: HD Radio command set (0x92..0x9A)
     Result hdPlayAlertTone(const uint8_t* args, uint16_t argLength, uint8_t* reply, uint16_t replyLength,
                            uint32_t timeoutUs=1000000UL) { return executeCommand(Command::HD_PLAY_ALERT_TONE,args,argLength,reply,replyLength,timeoutUs); }
+    // SI468X-API: hdTestGetBerInfo | SI468X-SUPPORT: Si4682 Si4683 Si4688 Si4689 | SI468X-FIRMWARE: FMHD; AMHD additionally on Si4683/Si4689 where command applies | SI468X-AN649: HD Radio command set (0x92..0x9A)
     Result hdTestGetBerInfo(const uint8_t* args, uint16_t argLength, uint8_t* reply, uint16_t replyLength,
                             uint32_t timeoutUs=1000000UL) { return executeCommand(Command::HD_TEST_GET_BER_INFO,args,argLength,reply,replyLength,timeoutUs); }
+    // SI468X-API: hdSetEnabledPorts | SI468X-SUPPORT: Si4682 Si4683 Si4688 Si4689 | SI468X-FIRMWARE: FMHD; AMHD additionally on Si4683/Si4689 where command applies | SI468X-AN649: HD Radio command set (0x92..0x9A)
     Result hdSetEnabledPorts(const uint8_t* args, uint16_t argLength, uint8_t* reply=0, uint16_t replyLength=0,
                              uint32_t timeoutUs=1000000UL) { return executeCommand(Command::HD_SET_ENABLED_PORTS,args,argLength,reply,replyLength,timeoutUs); }
+    // SI468X-API: hdGetEnabledPorts | SI468X-SUPPORT: Si4682 Si4683 Si4688 Si4689 | SI468X-FIRMWARE: FMHD; AMHD additionally on Si4683/Si4689 where command applies | SI468X-AN649: HD Radio command set (0x92..0x9A)
     Result hdGetEnabledPorts(const uint8_t* args, uint16_t argLength, uint8_t* reply, uint16_t replyLength,
                              uint32_t timeoutUs=1000000UL) { return executeCommand(Command::HD_GET_ENABLED_PORTS,args,argLength,reply,replyLength,timeoutUs); }
 
+    // SI468X-API: testGetRssi | SI468X-SUPPORT: ALL | SI468X-FIRMWARE: diagnostic/test support depends on active image revision | SI468X-AN649: TEST_GET_RSSI (0xE5)
     Result testGetRssi(TestRssiInfo& out, uint32_t timeoutUs=1000000UL) {
         const uint8_t a[1]={0}; uint8_t r[6];
         Result x=executeCommand(Command::TEST_GET_RSSI,a,1,r,sizeof(r),timeoutUs);
@@ -1582,6 +1921,7 @@ public:
     }
 
     /* Raw overload for image-specific test arguments/replies. */
+    // SI468X-API: testGetRssi | SI468X-SUPPORT: ALL | SI468X-FIRMWARE: diagnostic/test support depends on active image revision | SI468X-AN649: TEST_GET_RSSI (0xE5)
     Result testGetRssi(const uint8_t* args, uint16_t argLength, uint8_t* reply, uint16_t replyLength,
                        uint32_t timeoutUs=1000000UL) { return executeCommand(Command::TEST_GET_RSSI,args,argLength,reply,replyLength,timeoutUs); }
 
@@ -1589,11 +1929,13 @@ public:
     // NVSPI flash pass-through. Requires an appropriately patched bootloader.
     // -------------------------------------------------------------------------
 
+    // SI468X-API: flashLoadImage | SI468X-SUPPORT: ALL | SI468X-FIRMWARE: bootloader patched for NVSPI pass-through; A10: ROM0.016 path | SI468X-AN649: FLASH_LOAD (0x05) subcommands
     Result flashLoadImage(uint32_t address, uint32_t timeoutUs=1000000UL) {
         uint8_t a[7]={0,0,0,0,0,0,0}; writeLe32(a+3,address);
         return executeCommand(Command::FLASH_LOAD,a,7,0,0,timeoutUs);
     }
 
+    // SI468X-API: flashLoadImageChecked | SI468X-SUPPORT: ALL | SI468X-FIRMWARE: bootloader patched for NVSPI pass-through; A10: ROM0.016 path | SI468X-AN649: FLASH_LOAD (0x05) subcommands
     Result flashLoadImageChecked(uint32_t address, uint32_t size, uint32_t crc32,
                                  uint32_t timeoutUs=1000000UL) {
         uint8_t a[15]={1,0,0,0,0,0,0,0,0,0,0,0,0,0,0};
@@ -1601,6 +1943,7 @@ public:
         return executeCommand(Command::FLASH_LOAD,a,15,0,0,timeoutUs);
     }
 
+    // SI468X-API: flashCheckCrc32 | SI468X-SUPPORT: ALL | SI468X-FIRMWARE: bootloader patched for NVSPI pass-through; A10: ROM0.016 path | SI468X-AN649: FLASH_LOAD (0x05) subcommands
     Result flashCheckCrc32(uint32_t address, uint32_t size, uint32_t crc32,
                            uint32_t timeoutUs=1000000UL) {
         uint8_t a[15]={2,0,0,0,0,0,0,0,0,0,0,0,0,0,0};
@@ -1608,27 +1951,32 @@ public:
         return executeCommand(Command::FLASH_LOAD,a,15,0,0,timeoutUs);
     }
 
+    // SI468X-API: flashEraseChip | SI468X-SUPPORT: ALL | SI468X-FIRMWARE: bootloader patched for NVSPI pass-through; A10: ROM0.016 path | SI468X-AN649: FLASH_LOAD (0x05) subcommands
     Result flashEraseChip(uint32_t timeoutUs=30000000UL) {
         const uint8_t a[3]={0xFF,0xDE,0xC0};
         return executeCommand(Command::FLASH_LOAD,a,3,0,0,timeoutUs);
     }
+    // SI468X-API: flashEraseSector | SI468X-SUPPORT: ALL | SI468X-FIRMWARE: bootloader patched for NVSPI pass-through; A10: ROM0.016 path | SI468X-AN649: FLASH_LOAD (0x05) subcommands
     Result flashEraseSector(uint32_t sectorAddress, uint32_t timeoutUs=5000000UL) {
         uint8_t a[7]={0xFE,0xC0,0xDE,0,0,0,0}; writeLe32(a+3,sectorAddress);
         return executeCommand(Command::FLASH_LOAD,a,7,0,0,timeoutUs);
     }
 
+    // SI468X-API: flashGetProperty | SI468X-SUPPORT: ALL | SI468X-FIRMWARE: bootloader patched for NVSPI pass-through; A10: ROM0.016 path | SI468X-AN649: FLASH_LOAD (0x05) subcommands
     Result flashGetProperty(uint16_t property, uint16_t& value, uint32_t timeoutUs=1000000UL) {
         uint8_t a[3]={0x11,0,0}; writeLe16(a+1,property); uint8_t r[6];
         Result x=executeCommand(Command::FLASH_LOAD,a,3,r,sizeof(r),timeoutUs);
         if (x==Result::Ok) value=readLe16(r+4);
         return x;
     }
+    // SI468X-API: flashGetProperty | SI468X-SUPPORT: ALL | SI468X-FIRMWARE: bootloader patched for NVSPI pass-through; A10: ROM0.016 path | SI468X-AN649: FLASH_LOAD (0x05) subcommands
     Result flashGetProperty(FlashProperty property, uint16_t& value, uint32_t timeoutUs=1000000UL) {
         return flashGetProperty((uint16_t)property,value,timeoutUs);
     }
 
     struct FlashPropertyValue { uint16_t property; uint16_t value; };
 
+    // SI468X-API: flashSetPropertyList | SI468X-SUPPORT: ALL | SI468X-FIRMWARE: bootloader patched for NVSPI pass-through; A10: ROM0.016 path | SI468X-AN649: FLASH_LOAD (0x05) subcommands
     Result flashSetPropertyList(const FlashPropertyValue* list, uint8_t count,
                                 uint32_t timeoutUs=1000000UL) {
         if (!list || !count) return Result::InvalidArgument;
@@ -1642,6 +1990,7 @@ public:
         return executeCommand(Command::FLASH_LOAD,_workspace,(uint16_t)needed,0,0,timeoutUs);
     }
 
+    // SI468X-API: flashWriteBlock | SI468X-SUPPORT: ALL | SI468X-FIRMWARE: bootloader patched for NVSPI pass-through; A10: ROM0.016 path | SI468X-AN649: FLASH_LOAD (0x05) subcommands
     Result flashWriteBlock(uint32_t address, const uint8_t* data, uint16_t length,
                            FlashSubcommand verification=FlashSubcommand::WRITE_BLOCK_READBACK_AND_PACKET_VERIFY,
                            uint32_t crc32=0, uint32_t timeoutUs=5000000UL) {
@@ -1667,6 +2016,7 @@ public:
      * but does not define the polynomial in the Programming Guide itself; use
      * the CRC value supplied with a firmware release when one is provided.
      */
+    // SI468X-API: crc32Ieee | SI468X-SUPPORT: ALL | SI468X-FIRMWARE: none; host-side utility only | SI468X-AN649: CRC32 helper for flash verification
     static uint32_t crc32Ieee(const uint8_t* data, size_t length, uint32_t seed=0xFFFFFFFFUL) {
         uint32_t c=seed;
         for (size_t i=0;i<length;++i) {
@@ -1681,6 +2031,7 @@ public:
     // scheduler or when recorded replies are tested on a desktop machine.
     // -------------------------------------------------------------------------
 
+    // SI468X-API: parseFmRsqStatus | SI468X-SUPPORT: Si4682 Si4683 Si4684 Si4685 Si4688 Si4689 | SI468X-FIRMWARE: none; host-side parser for FM/FMHD replies | SI468X-AN649: reply parser
     static Result parseFmRsqStatus(const uint8_t* r, size_t n, FmRsqStatus& o) {
         if (!r || n<17) return Result::MalformedReply;
         parseStatus(r,n,o.status);
@@ -1691,6 +2042,7 @@ public:
         o.hdLevel=(n>15)?r[15]:0; o.filteredHdLevel=(n>16)?r[16]:0; return Result::Ok;
     }
 
+    // SI468X-API: parseAmRsqStatus | SI468X-SUPPORT: Si4683 Si4685 Si4689 | SI468X-FIRMWARE: none; host-side parser for AM/AMHD replies | SI468X-AN649: reply parser
     static Result parseAmRsqStatus(const uint8_t* r, size_t n, AmRsqStatus& o) {
         if (!r || n<17) return Result::MalformedReply;
         parseStatus(r,n,o.status);
@@ -1701,6 +2053,7 @@ public:
         o.hdLevel=r[15]; o.filteredHdLevel=r[16]; return Result::Ok;
     }
 
+    // SI468X-API: parseFmAcfStatus | SI468X-SUPPORT: Si4682 Si4683 Si4684 Si4685 Si4688 Si4689 | SI468X-FIRMWARE: none; host-side parser for FM/FMHD replies | SI468X-AN649: reply parser
     static Result parseFmAcfStatus(const uint8_t* r, size_t n, FmAcfStatus& o) {
         if (!r || n<9) return Result::MalformedReply;
         parseStatus(r,n,o.status);
@@ -1711,6 +2064,7 @@ public:
         o.stereoBlendPercent=(uint8_t)(r[8]&0x7Fu); return Result::Ok;
     }
 
+    // SI468X-API: parseAmAcfStatus | SI468X-SUPPORT: Si4683 Si4685 Si4689 | SI468X-FIRMWARE: none; host-side parser for AM/AMHD replies | SI468X-AN649: reply parser
     static Result parseAmAcfStatus(const uint8_t* r, size_t n, AmAcfStatus& o) {
         if (!r || n<9) return Result::MalformedReply;
         parseStatus(r,n,o.status);
@@ -1720,6 +2074,7 @@ public:
         o.attenuationDb=(uint8_t)(r[6]&0x1Fu); o.highCut100Hz=r[7]; o.lowCut100Hz=r[8]; return Result::Ok;
     }
 
+    // SI468X-API: parseFmRdsStatus | SI468X-SUPPORT: Si4682 Si4683 Si4684 Si4685 Si4688 Si4689 | SI468X-FIRMWARE: none; host-side parser for FM/FMHD replies | SI468X-AN649: reply parser
     static Result parseFmRdsStatus(const uint8_t* r, size_t n, FmRdsGroup& o) {
         if (!r || n<20) return Result::MalformedReply;
         parseStatus(r,n,o.status);
@@ -1731,6 +2086,7 @@ public:
         return Result::Ok;
     }
 
+    // SI468X-API: parseDabDigradStatus | SI468X-SUPPORT: Si4684 Si4685 Si4688 Si4689 | SI468X-FIRMWARE: none; host-side parser for DAB replies | SI468X-AN649: reply parser
     static Result parseDabDigradStatus(const uint8_t* r, size_t n, DabDigradStatus& o) {
         if (!r || n<23) return Result::MalformedReply;
         parseStatus(r,n,o.status);
@@ -1740,6 +2096,7 @@ public:
         o.antennaCap=readLe16(r+18); o.cuLevel=readLe16(r+20); o.fastDetect=r[22]; return Result::Ok;
     }
 
+    // SI468X-API: parseDabEventStatus | SI468X-SUPPORT: Si4684 Si4685 Si4688 Si4689 | SI468X-FIRMWARE: none; host-side parser for DAB replies | SI468X-AN649: reply parser
     static Result parseDabEventStatus(const uint8_t* r, size_t n, DabEventStatus& o) {
         if (!r || n<8) return Result::MalformedReply;
         parseStatus(r,n,o.status);
@@ -1750,18 +2107,21 @@ public:
         return Result::Ok;
     }
 
+    // SI468X-API: parseDabEnsembleInfo | SI468X-SUPPORT: Si4684 Si4685 Si4688 Si4689 | SI468X-FIRMWARE: none; host-side parser for DAB replies | SI468X-AN649: reply parser
     static Result parseDabEnsembleInfo(const uint8_t* r, size_t n, DabEnsembleInfo& o) {
         if (!r || n<26) return Result::MalformedReply;
         parseStatus(r,n,o.status); o.ensembleId=readLe16(r+4); memcpy(o.label,r+6,16); o.label[16]='\0';
         o.ecc=r[22]; o.abbreviationMask=readLe16(r+24); return Result::Ok;
     }
 
+    // SI468X-API: parseDabTime | SI468X-SUPPORT: Si4684 Si4685 Si4688 Si4689 | SI468X-FIRMWARE: none; host-side parser for DAB replies | SI468X-AN649: reply parser
     static Result parseDabTime(const uint8_t* r, size_t n, DabTimeInfo& o) {
         if (!r || n<11) return Result::MalformedReply;
         parseStatus(r,n,o.status); o.year=readLe16(r+4); o.month=r[6]; o.day=r[7];
         o.hour=r[8]; o.minute=r[9]; o.second=r[10]; return Result::Ok;
     }
 
+    // SI468X-API: parseDabAudioInfo | SI468X-SUPPORT: Si4684 Si4685 Si4688 Si4689 | SI468X-FIRMWARE: none; host-side parser for DAB replies | SI468X-AN649: reply parser
     static Result parseDabAudioInfo(const uint8_t* r, size_t n, DabAudioInfo& o) {
         if (!r || n<10) return Result::MalformedReply;
         parseStatus(r,n,o.status); o.bitRateKbps=readLe16(r+4); o.sampleRateHz=readLe16(r+6);
@@ -1769,12 +2129,14 @@ public:
         o.audioMode=(uint8_t)(r[8]&0x03u); o.drcGainQuarterDb=r[9]; return Result::Ok;
     }
 
+    // SI468X-API: parseDabSubchannelInfo | SI468X-SUPPORT: Si4684 Si4685 Si4688 Si4689 | SI468X-FIRMWARE: none; host-side parser for DAB replies | SI468X-AN649: reply parser
     static Result parseDabSubchannelInfo(const uint8_t* r, size_t n, DabSubchannelInfo& o) {
         if (!r || n<12) return Result::MalformedReply;
         parseStatus(r,n,o.status); o.serviceMode=r[4]; o.protectionInfo=r[5]; o.bitRateKbps=readLe16(r+6);
         o.capacityUnits=readLe16(r+8); o.capacityUnitAddress=readLe16(r+10); return Result::Ok;
     }
 
+    // SI468X-API: parseDabServiceInfo | SI468X-SUPPORT: Si4684 Si4685 Si4688 Si4689 | SI468X-FIRMWARE: none; host-side parser for DAB replies | SI468X-AN649: reply parser
     static Result parseDabServiceInfo(const uint8_t* r, size_t n, DabServiceInfo& o) {
         if (!r || n<26) return Result::MalformedReply;
         parseStatus(r,n,o.status); o.serviceLinkingAvailable=(r[4]&0x40u)!=0; o.pty=(uint8_t)((r[4]>>1)&0x1Fu);
@@ -1783,6 +2145,7 @@ public:
         memcpy(o.label,r+8,16); o.label[16]='\0'; o.abbreviationMask=readLe16(r+24); return Result::Ok;
     }
 
+    // SI468X-API: parseDabComponentInfo | SI468X-SUPPORT: Si4684 Si4685 Si4688 Si4689 | SI468X-FIRMWARE: none; host-side parser for DAB replies | SI468X-AN649: reply parser
     static Result parseDabComponentInfo(const uint8_t* r, size_t n, DabComponentInfo& o) {
         if (!r || n<28) return Result::MalformedReply;
         parseStatus(r,n,o.status); o.globalId=r[4]; o.language=(uint8_t)(r[6]&0x3Fu); o.charset=(uint8_t)(r[7]&0x3Fu);
@@ -1792,6 +2155,7 @@ public:
         o.userApplicationData=o.userApplicationBytes?(r+28):0; return Result::Ok;
     }
 
+    // SI468X-API: parseDsrvHeader | SI468X-SUPPORT: ALL | SI468X-FIRMWARE: none; host-side DSRV/DLS parser; payload originates from DAB/HD service | SI468X-AN649: DSRV/DLS parser
     static Result parseDsrvHeader(const uint8_t* r, size_t n, DsrvHeader& o) {
         if (!r || n<24) return Result::MalformedReply;
         parseStatus(r,n,o.status);
@@ -1801,6 +2165,7 @@ public:
         o.segmentNumber=readLe16(r+20); o.numberOfSegments=readLe16(r+22); return Result::Ok;
     }
 
+    // SI468X-API: parseDlsPayload | SI468X-SUPPORT: ALL | SI468X-FIRMWARE: none; host-side DSRV/DLS parser; payload originates from DAB/HD service | SI468X-AN649: DSRV/DLS parser
     static Result parseDlsPayload(const uint8_t* payload, uint16_t length, DlsFrame& o) {
         if (!payload || length<2) return Result::MalformedReply;
         o.toggle=(payload[0]&0x80u)!=0; o.command=(payload[0]&0x10u)!=0;
@@ -1826,6 +2191,8 @@ private:
     uint32_t _deadline, _nextCtsPoll, _nextIdlePoll;
     uint32_t _ctsPollIntervalUs, _idlePollIntervalUs;
     uint8_t _lastDeviceError;
+    Part _detectedPart;
+    Image _activeImage;
 
     uint32_t nowUs() const { return _host.timeUs ? _host.timeUs(_host.context) : 0u; }
     static bool timeReached(uint32_t now, uint32_t target) { return (int32_t)(now-target)>=0; }
@@ -1969,6 +2336,38 @@ private:
         }
     }
 };
+
+inline Result Si468x::readDabServiceList(DabServiceListParser& parser, uint16_t preferredChunk,
+                                         uint32_t timeoutUs) {
+    if (!_workspace || _workspaceSize < 12u) return Result::BufferTooSmall;
+
+    /* First read just STATUS + SIZE so the full preserved response length is known. */
+    uint8_t first[6];
+    Result r=getDigitalServiceList(0,first,sizeof(first),timeoutUs);
+    if (r!=Result::Ok) return r;
+    const uint16_t listSize=readLe16(first+4);
+    if (listSize>2694u) return Result::MalformedReply;
+    uint32_t remaining=(uint32_t)listSize+2u; /* LIST_SIZE excludes its own two bytes. */
+
+    size_t capacity=_workspaceSize-4u;
+    uint16_t chunk=(preferredChunk && preferredChunk<capacity)?preferredChunk:(uint16_t)capacity;
+    if (chunk>4092u) chunk=4092u;
+    chunk=(uint16_t)(chunk & 0xFFFCu);
+    if (chunk<4u) return Result::BufferTooSmall;
+
+    parser.reset();
+    uint16_t offset=0;
+    while (remaining) {
+        uint16_t n=(remaining<chunk)?(uint16_t)remaining:chunk;
+        r=readOffset(offset,_workspace,n,timeoutUs);
+        if (r!=Result::Ok) return r;
+        r=parser.feed(_workspace+4,n);
+        if (r!=Result::Ok) return r;
+        remaining-=n;
+        offset=(uint16_t)(offset+n);
+    }
+    return parser.complete()?Result::Ok:Result::MalformedReply;
+}
 
 // -----------------------------------------------------------------------------
 // 8. Lightweight RDS decoder. No display encoding or dynamic memory is assumed.
