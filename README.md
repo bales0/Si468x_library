@@ -19,6 +19,8 @@ The family model includes Si4682, Si4683, Si4684, Si4685, Si4688 and Si4689. The
 
 `capabilitiesForPart()` provides a convenient product-family capability summary for FM, RDS, AM, HD-FM, HD-AM and DAB/DAB+, but it is not a substitute for checking the actual loaded image and firmware revision with `GET_PART_INFO`, `GET_SYS_STATE` and `GET_FUNC_INFO`.
 
+AN651 lists audio support for all six receiver parts above. The common audio/output properties in `Si468x.h` are therefore documented as supported by all family members; their availability still depends on the device being in an appropriate application state.
+
 ## One file
 
 Application code needs only:
@@ -221,7 +223,7 @@ Helper:
 radio.bootNvspiWithMiniPatch(...);
 ```
 
-The physical reset/power sequencing remains a board responsibility. Optional `setResetAsserted()` and `setPowerEnabled()` wrappers use the board callbacks without assuming GPIO polarity.
+The physical reset/power wiring remains a board responsibility. Optional `setResetAsserted()` and `setPowerEnabled()` wrappers use board callbacks without assuming GPIO polarity. `hardwareReset()` asserts logical reset before an optional board power-enable transition, keeps reset asserted while supplies settle, then releases reset; the board adapter remains responsible for the actual RSTB/PWREN polarity and electrical behavior.
 
 ## NVSPI flash management
 
@@ -239,6 +241,39 @@ The driver contains the AN649 pass-through mechanisms, including:
 The A10 bootloader must be patched appropriately before the NVSPI pass-through commands are used.
 
 The included `crc32Ieee()` helper implements conventional reflected CRC-32/ISO-HDLC. AN649 requires CRC32 values for several flash commands but does not define the polynomial in the Programming Guide; when a firmware release supplies an authoritative CRC, use that value.
+
+
+## Core/application boundary
+
+`Si468x.h` stops at the device protocol boundary. It parses only structures that are
+directly defined as Si468x command replies or transport records. Broadcast-content
+decoding is deliberately outside the core. In particular, the core does not assemble
+RDS PS/RadioText/AF/CT/EON, DLS/DL+, MOT, EPG, Journaline, TMC/TPEG or image data.
+
+The raw information required by those application decoders remains available:
+
+- FM RDS blocks A/B/C/D plus BLE/status;
+- DAB DSRV `DATA_SRC`, `DSCTy`, SID, CID, byte count and segment metadata;
+- DAB service/component/user-application protocol fields;
+- raw HD payloads where AN649 delegates semantics to external HD Radio specifications.
+
+This keeps the core deterministic and reusable without hiding device information.
+
+## Runtime device and firmware applicability
+
+`getPartInfo()` caches the silicon member and `getSystemState()` caches the active image. `capabilities()` / `partSupports()` describe hardware-family capability, while `featureAvailability()` combines the detected part with the active image. `commandAvailability()` is intentionally narrower than a full device-state simulator: it reports family/image compatibility, but the Si468x `ERR_CMD` response remains authoritative for exact sequencing and firmware-revision restrictions.
+
+`PROTOCOL_REFERENCE.md` is shipped beside the header as an offline protocol reference.
+It includes the command surface, raw/repeated reply notes, all property summaries and a
+compact non-reserved property bit-field map. The header itself carries fixed
+`SI468X-API`, `SI468X-SUPPORT`, `SI468X-FIRMWARE` and `SI468X-AN649` tags plus concise
+command/property descriptions, defaults, units and ranges where AN649 supplies them.
+External broadcast standards are explicitly marked as external rather than being guessed.
+
+Command failures are also self-describing: `lastDeviceError()` preserves the raw AN649
+error byte and `lastCommandErrorReason()` maps every error code documented by AN649
+(`NotSupported`, `BadFrequency`, `BadArg1` ... `AppNotSupported`) without requiring a
+separate lookup. Unknown future error bytes remain available through the raw accessor.
 
 ## FM / FMHD
 
@@ -258,15 +293,8 @@ Typed helpers include:
 
 ## RDS/RBDS
 
-`RdsDecoder` is a lightweight no-allocation helper on top of `FM_RDS_STATUS`. It currently decodes the fields that can be implemented directly from the documented RDS group structure used here:
+`Si468x.h` deliberately stops at raw RDS blocks. `FM_RDS_STATUS` is decoded only into `FmRdsGroup` (PI/PTY flags, BLE and blocks A/B/C/D). PS, RadioText, AF, CT, EON and other RDS group semantics belong in the application layer.
 
-- PI;
-- PTY;
-- TP/TA;
-- Program Service (PS);
-- RadioText 2A/2B;
-- Clock Time 4A;
-- basic ECC handling.
 
 The raw RDS A/B/C/D blocks and per-block BLE values remain available to applications that need additional RDS/RBDS group decoders.
 
@@ -274,7 +302,7 @@ The raw RDS A/B/C/D blocks and per-block BLE values remain available to applicat
 
 Typed tune, seek, RSQ and ACF methods are provided. Every AM/AMHD property documented by AN649 is also exposed through the `Property` enum and generic property API.
 
-HD-specific command replies are kept raw where their application payload is defined by external HD Radio/iBiquity specifications rather than AN649.
+AN649-defined HD protocol replies such as digital-radio status, event status and BER counters have typed structures. HD application payloads (for example SIS/PSD/alert content whose semantic layout AN649 delegates to external HD Radio/iBiquity specifications) remain raw.
 
 ## DAB / DAB+
 
@@ -335,11 +363,18 @@ radio.stopDabService(serviceId, componentId);
 
 The driver does not automatically acknowledge or consume all DSRV packets because applications have different real-time and memory constraints. The application should service DSRV promptly and handle overflow as an error condition.
 
+AN649 Rev. 1.9 is internally inconsistent about DSRV physical-error interrupt bit 2: the
+command/property tables show it as reserved, while section 7.7 Table 19 and the supplied
+DSRV handling example define `DSRVERRINT` / `DSRV_PHYERR_MASK` as bit 2. The driver
+therefore exposes received INTSRC bit 2 as `physicalError()` and
+`DSRV_INTERRUPT_PHYSICAL_ERROR`, but documents that enabling it through property 0x8100
+may depend on the firmware revision.
+
 ### Known/documented high-level handling
 
-The single header provides DLS/DL+ prefix parsing as documented by AN649. AN649 states that the Si468x reconstructs DLS messages/commands before forwarding them. Semantic DL+ tag decoding itself is defined by ETSI TS 102 980, not by AN649, so the driver exposes the reconstructed command body rather than inventing an incomplete decoder.
+The single header exposes the Si468x DSRV transport header and raw payload bytes. DLS/DL+, MOT, EPG, Journaline, TMC/TPEG and other broadcast-content formats are intentionally left to the application. This keeps the core protocol-only while preserving all SID/CID, payload-size and segmentation metadata required by external decoders.
 
-MOT data is identified (`isMotPad()`) and delivered through the complete raw DSRV path. AN649 explicitly leaves assembly of MOT data groups/segments/objects to the host MOT decoder and points to external MOT specifications; therefore no undocumented MOT object parser is fabricated in this library.
+The core exposes raw `DATA_SRC`, `DSCTy`, service/component IDs, byte counts and segmentation metadata through `DsrvHeader`. The application decides whether a payload represents MOT or another broadcast-content format. AN649 leaves MOT data-group/segment/object assembly to the host decoder, so no MOT object parser is fabricated in the core.
 
 Likewise, proprietary HD Radio data-service payloads remain raw when AN649 delegates their layout to external licensed specifications.
 
@@ -379,3 +414,32 @@ See `MIGRATION_FROM_DABSHIELD.md` for a conceptual mapping. There is deliberatel
 ## Validation status
 
 This release has desktop C++11 compile tests and parser/command tests. It has **not yet been validated on every physical Si468x part or every firmware revision**. Hardware validation should include boot, tune/seek, interrupt timing, DSRV load, NVSPI programming and error recovery on the actual board.
+
+## Revision notes
+
+### 0.9.5 protocol-boundary and audit revision
+
+- Removed high-level RDS and DLS content decoders from the core; raw RDS groups and raw DSRV transport remain available.
+- Added typed AN649-level HD DIGRAD, HD event-status and HD BER replies while leaving external HD Radio content formats raw.
+- Added multi-property `GET_PROPERTY` support through `getProperties()`.
+- Tightened documented argument ranges, DAB service-list validation, ERR_CMD diagnostics and READ_OFFSET bounds.
+- Added the complete AN649 `CommandErrorReason` mapping while preserving unknown raw error bytes.
+- Audited all 11 NVSPI pass-through subcommands and all 8 NVSPI pass-through properties.
+- Added a compact non-reserved property bit-field map to the bundled protocol reference.
+- Corrected FM ACF convergence bits and exposed omitted interrupt/status fields in several typed replies.
+- Corrected `hardwareReset()` ordering so reset is asserted before an optional power-enable transition.
+- Expanded source comments and `PROTOCOL_REFERENCE.md` so device-protocol use does not require reverse-engineering the driver.
+
+### 0.9.4 metadata cleanup
+
+The driver revision is source documentation only. There are no runtime library-version constants/APIs, avoiding confusion with Si468x silicon, ROM, patch or active-firmware revisions.
+
+### 0.9.3 human/AI support annotations
+
+The public API carries fixed-format `SI468X-API`, `SI468X-SUPPORT`, `SI468X-FIRMWARE` and `SI468X-AN649` tags so isolated functions remain self-describing.
+
+### 0.9.2 runtime capability and integration fixes
+
+- Corrected AUDIO_MUTE left/right bit mapping (bit 0 = left, bit 1 = right).
+- Added cached GET_PART_INFO / GET_SYS_STATE identity and runtime feature/command availability helpers.
+- Added generic `hardwareReset()`, `dabTuneService()` and streaming `readDabServiceList()` helpers.

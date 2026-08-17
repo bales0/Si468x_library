@@ -38,7 +38,7 @@ application/UI/storage
 | FM seek | `fmSeek()` or `startFmSeek()` |
 | FM signal status | `fmRsqStatus()` |
 | RDS raw groups | `fmRdsStatus()` |
-| RDS application text | optional `RdsDecoder` helper |
+| RDS application text | application decoder fed from `FmRdsGroup` raw blocks |
 | DAB tune | `dabTune()` or `startDabTune()` |
 | DAB signal status | `dabDigradStatus()` |
 | service list | `getDigitalServiceList()` + `DabServiceListParser` |

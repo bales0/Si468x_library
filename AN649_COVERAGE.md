@@ -1,8 +1,11 @@
 # AN649 Rev. 1.9 Coverage
-This file is generated as a review aid for `Si468x.h`. The universal driver contains the full set of command identifiers and property identifiers extracted from the command/property summaries in AN649 Rev. 1.9. All numeric commands remain accessible through `executeRaw()` and all properties through `setProperty()` / `getProperty()` even where a higher-level typed parser is intentionally not supplied.
+This file is generated as a review aid for `Si468x.h`. The universal driver contains the full set of command identifiers and property identifiers extracted from the command/property summaries in AN649 Rev. 1.9. All numeric commands remain accessible through `executeRaw()` and all properties through `setProperty()` / `getProperty()` even where a higher-level typed parser is intentionally not supplied. The complete AN649 `ERR_CMD` reason table is represented by `CommandErrorReason`, while `lastDeviceError()` preserves the raw byte for forward compatibility.
 - Commands represented: **53 / 53**
 - Properties represented: **202 / 202**
-- High-level parsers are provided only where AN649 itself defines enough payload semantics. HD Radio payloads that AN649 delegates to external iBiquity/HD specifications remain raw. DAB MOT object assembly and semantic DL+ tag decoding likewise require the external standards referenced by AN649.
+- NVSPI pass-through subcommands represented: **11 / 11** (Table 11)
+- NVSPI pass-through properties represented: **8 / 8** (Table 12)
+- Typed parsers are provided only for Si468x protocol replies. Broadcast-content decoders are deliberately outside the core: RDS group semantics, DLS/DL+, MOT, EPG and other service payload formats remain application-layer data. HD Radio payloads delegated by AN649 to external iBiquity/HD specifications remain raw.
+- `WRITE_STORAGE` / `READ_STORAGE` are treated as DAB/DAB+ application commands in Rev. 1.9 because they remain in the DAB command chapter while the Rev. 1.9 change log explicitly removes them from the FMHD and AMHD chapters.
 - AN649 mentions `DAB_GET_ANNOUNCEMENT_INFO` in an event description but Rev. 1.9 does not provide its opcode or command layout. The library does not invent an opcode; a later documented definition can be accessed with `executeRaw()`.
 
 ## Commands

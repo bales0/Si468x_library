@@ -15,13 +15,62 @@ static void onService(void* c,const DabServiceEntry& x){ Capture* p=(Capture*)c;
 static void onComponent(void* c,const DabComponentEntry& x){ Capture* p=(Capture*)c; p->component=x; ++p->components; }
 
 int main(){
-    uint8_t rds[20]={0x80,0,0,0,0,0x1A,0x25,0,0x34,0x12,1,0, 'A','B','C','D','E','F','G','H'};
-    FmRdsGroup g; assert(Si468x::parseFmRdsStatus(rds,20,g)==Result::Ok); assert(g.pi==0x1234); assert(g.fifoUsed==1); assert(g.block[0]==0x4241);
+    uint8_t rds[20]={0x80,0,0,0,0x1B,0x1B,0x25,0,0x34,0x12,1,0, 'A','B','C','D','E','F','G','H'};
+    FmRdsGroup g; assert(Si468x::parseFmRdsStatus(rds,20,g)==Result::Ok);
+    assert(g.tpPtyInterrupt && g.piInterrupt && g.syncInterrupt && g.fifoInterrupt);
+    assert(g.tpPtyValid && g.piValid && g.sync && g.fifoLost);
+    assert(g.pi==0x1234); assert(g.fifoUsed==1); assert(g.block[0]==0x4241);
 
-    uint8_t ds[24]={0x80,0,0,0,1,2,0,0x80, 1,2,3,4, 5,6,7,8, 0,0, 4,0, 2,0, 3,0};
-    DsrvHeader h; assert(Si468x::parseDsrvHeader(ds,24,h)==Result::Ok); assert(h.dataSource==2); assert(h.serviceId==0x04030201UL); assert(h.byteCount==4);
+    uint8_t fmrsq[17]={0x80,0,0,0,0x0F,0xB3,0xBA,0x27,0xFE,0xF0,12,33,0x34,0x12,0,50,40};
+    FmRsqStatus fr; assert(Si468x::parseFmRsqStatus(fmrsq,sizeof(fmrsq),fr)==Result::Ok);
+    assert(fr.snrHighInterrupt && fr.snrLowInterrupt && fr.rssiHighInterrupt && fr.rssiLowInterrupt);
+    assert(fr.bandLimit && fr.hdDetected && fr.filteredHdDetected && fr.afcRail && fr.valid);
 
-    uint8_t dls[]={0x80,0x10,'H','i'}; DlsFrame f; assert(Si468x::parseDlsPayload(dls,4,f)==Result::Ok); assert(f.isMessage()); assert(f.charset==1); assert(f.bodyLength==2);
+    uint8_t fmacf[9]={0x80,0,0,0,0x07,0x77,0x1F,100,0xE4};
+    FmAcfStatus fa; assert(Si468x::parseFmAcfStatus(fmacf,sizeof(fmacf),fa)==Result::Ok);
+    assert(fa.blendInterrupt && fa.highCutInterrupt && fa.softMuteInterrupt);
+    assert(fa.blendConverged && fa.highCutConverged && fa.softMuteConverged);
+    assert(fa.blendActive && fa.highCutActive && fa.softMuteActive);
+
+    uint8_t amrsq[17]={0x80,0,0,0,0x0F,0xB3,0x40,0x06,0,20,10,80,0,0,0,40,30};
+    AmRsqStatus ar; assert(Si468x::parseAmRsqStatus(amrsq,sizeof(amrsq),ar)==Result::Ok);
+    assert(ar.snrHighInterrupt && ar.snrLowInterrupt && ar.rssiHighInterrupt && ar.rssiLowInterrupt);
+
+    // Fixed HD protocol replies are decoded by the core, while external SIS/PSD
+    // payload semantics deliberately remain raw.
+    uint8_t hd[23]={0x80,0,0,0,0xEF,0xEF,0x95,44,0x1D,0x83,0x03,0x80,
+                    1,0,0,0, 2,0,0,0, 7,5,13};
+    HdDigradStatus hdr; assert(Si468x::parseHdDigradStatus(hd,sizeof(hd),hdr)==Result::Ok);
+    assert(hdr.hdLogoInterrupt && hdr.sourceAnalogInterrupt && hdr.sourceDigitalInterrupt);
+    assert(hdr.audioAcquisitionInterrupt && hdr.acquisitionInterrupt && hdr.cdnrHighInterrupt && hdr.cdnrLowInterrupt);
+    assert(hdr.hdLogo && hdr.sourceAnalog && hdr.sourceDigital && hdr.audioAcquired && hdr.acquired);
+    assert(hdr.blendControl==2u && hdr.digitalAudioQuality==0x15u && hdr.cdnr==44u);
+    assert(hdr.txGain==-3);
+    assert(hdr.audioProgramsAvailable==0x83u && hdr.audioProgramsPlaying==0x03u && hdr.audioConditionalAccess==0x80u);
+    assert(hdr.coreAudioErrors==1u && hdr.enhancedAudioErrors==2u && hdr.pty==7u && hdr.primaryServiceMode==5u && hdr.codecMode==13u);
+
+    uint8_t hev[18]={0x80,0,0,0,0xDF,0xCF,0x34,0x12,0x78,0x56,0x0F,0x3F,0x7F,0xFF,0x07,9,10,11};
+    HdEventStatus he; assert(Si468x::parseHdEventStatus(hev,sizeof(hev),he)==Result::Ok);
+    assert(he.dataInfoInterrupt() && he.audioInfoInterrupt() && he.alertInterrupt() && he.psdInterrupt() && he.sisInterrupt());
+    assert(he.dataServiceListInterrupt() && he.audioServiceListInterrupt());
+    assert(he.dataInfoAvailable() && he.audioInfoAvailable() && he.psdAvailable() && he.sisAvailable());
+    assert(he.dataServiceListAvailable() && he.audioServiceListAvailable());
+    assert(he.audioServiceListVersion==0x1234u && he.dataServiceListVersion==0x5678u);
+    assert(he.alertFrameCount==9u && he.alertMessageId==10u && he.alertCrc7==11u);
+
+    uint8_t ber[44]={0x80,0,0,0};
+    for (uint8_t i=0;i<10;++i) writeLe32(ber+4u+(size_t)i*4u,(uint32_t)i+1u);
+    HdBerInfo hb; assert(Si468x::parseHdBerInfo(ber,sizeof(ber),hb)==Result::Ok);
+    assert(hb.pidsBlockErrors==1u && hb.pidsBlocksTested==2u && hb.pidsBitErrors==3u && hb.pidsBitsTested==4u);
+    assert(hb.p3BitErrors==5u && hb.p3BitsTested==6u && hb.p2BitErrors==7u && hb.p2BitsTested==8u && hb.p1BitErrors==9u && hb.p1BitsTested==10u);
+
+    uint8_t dab[23]={0x80,0,0,0,0x1F,0x1D,0xC0,18,99,17,2,0,0x80,0xD6,0x02,0,3,0xFE,0x20,0,0x34,0x12,7};
+    DabDigradStatus dr; assert(Si468x::parseDabDigradStatus(dab,sizeof(dab),dr)==Result::Ok);
+    assert(dr.hardMuteInterrupt && dr.ficErrorInterrupt && dr.acquisitionInterrupt && dr.rssiHighInterrupt && dr.rssiLowInterrupt);
+    assert(dr.hardMute && dr.ficError && dr.acquired && dr.valid);
+
+    uint8_t ds[24]={0x80,0,0,0,7,2,0,0x80, 1,2,3,4, 5,6,7,8, 0,0, 4,0, 2,0, 3,0};
+    DsrvHeader h; assert(Si468x::parseDsrvHeader(ds,24,h)==Result::Ok); assert(h.dataSource==2); assert(h.dataReady() && h.overflow() && h.physicalError()); assert(h.serviceId==0x04030201UL); assert(h.byteCount==4);
 
     // DAB service-list streaming test. Feed deliberately odd chunk sizes to
     // verify that no full-list RAM buffer is required.
@@ -55,5 +104,10 @@ int main(){
     assert(cap.component.componentType==(0x45u>>2));
     assert(cap.component.conditionalAccess);
     assert(cap.component.userApplicationInfoValid);
+
+    // AN649 defines M < 15 components per service; reject the reserved value 15.
+    uint8_t invalidList[8+24]; std::memset(invalidList,0,sizeof(invalidList));
+    writeLe16(invalidList,30); invalidList[4]=1; invalidList[13]=0x0F;
+    DabServiceListParser bad; assert(bad.feed(invalidList,sizeof(invalidList))==Result::MalformedReply); assert(bad.error());
     return 0;
 }

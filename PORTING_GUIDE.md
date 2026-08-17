@@ -97,7 +97,7 @@ void setPower(void* context, bool enabled);
 
 `asserted` and `enabled` are logical values. Electrical polarity belongs entirely in the platform adapter.
 
-The driver exposes `setResetAsserted()` and `setPowerEnabled()`. The application still owns the complete board-specific power/reset sequence.
+The driver exposes `setResetAsserted()` and `setPowerEnabled()` for direct board control. `hardwareReset()` provides the generic safe ordering used by the core: assert reset first, optionally enable board power while reset remains asserted, wait for supplies to settle, then release reset. The adapter still owns electrical polarity and any board-specific regulator/clock sequencing.
 
 ## 6. INTB
 

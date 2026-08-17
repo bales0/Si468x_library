@@ -15,6 +15,5 @@ int main(){
     uint16_t v=0; (void)r.getProperty(Property::AUDIO_ANALOG_VOLUME,v);
     FmRsqStatus f; (void)r.fmRsqStatus(f);
     DabServiceListParser p; (void)p;
-    RdsDecoder d; (void)d;
     return 0;
 }
