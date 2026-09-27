@@ -99,6 +99,12 @@ void setPower(void* context, bool enabled);
 
 The driver exposes `setResetAsserted()` and `setPowerEnabled()` for direct board control. `hardwareReset()` provides the generic safe ordering used by the core: assert reset first, optionally enable board power while reset remains asserted, wait for supplies to settle, then release reset. The adapter still owns electrical polarity and any board-specific regulator/clock sequencing.
 
+Once `hardwareReset()` has completed successfully it discards any command that was
+waiting for a response from the pre-reset device. If board code performs reset outside
+the driver, call `abortCommand()` only after the physical reset has actually completed
+and before issuing the first post-reset command. `abortCommand()` is host-side only and
+must not generate a bus transaction. It is not intended as routine busy-state recovery.
+
 ## 6. INTB
 
 The GPIO ISR should be minimal:
@@ -119,6 +125,10 @@ radio.service();
 ```
 
 A status callback may set application flags, but should not recursively send a command from inside `service()`.
+
+An expired command deadline causes one final status read. Callers should treat
+`lastServiceGapUs()` and `lastDeadlineLatenessUs()` as host scheduling diagnostics only:
+the host cannot reconstruct the exact earlier instant at which CTS became ready.
 
 ## 7. Workspace
 

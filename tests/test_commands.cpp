@@ -39,6 +39,15 @@ int main(){
     assert(radio.hardwareReset(1000u,1000u,1000u)==Result::Ok);
     assert(m.eventCount==3u && m.events[0]=='R' && m.events[1]=='P' && m.events[2]=='r');
 
+    // A successfully completed physical reset invalidates any host-side
+    // command that was waiting for the pre-reset device response.
+    assert(radio.startCommand(Command::GET_SYS_STATE,0,0)==Result::Pending);
+    m.eventCount=0;
+    assert(radio.hardwareReset(1000u,1000u,1000u)==Result::Ok);
+    assert(!radio.busy());
+    assert(radio.lastResult()==Result::Aborted);
+    assert(m.eventCount==3u && m.events[0]=='R' && m.events[1]=='P' && m.events[2]=='r');
+
     // GET_DIGITAL_SERVICE_LIST SERTYPE is a two-bit field; all 0..3 values
     // must be passed intact, not truncated to one bit.
     for(uint8_t t=0;t<4;++t){

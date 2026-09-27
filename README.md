@@ -120,6 +120,28 @@ for (;;) {
 
 `service()` handles command CTS completion and optional status polling. With INTB connected, `notifyInterrupt()` causes the status to be serviced promptly. Without a timer, the non-blocking engine can still poll once per `service()` call; blocking convenience functions and enforced timeouts require `HostInterface::timeUs`.
 
+If the host services a command after its deadline, `service()` performs exactly one
+final CTS status read. A ready device response is completed normally, including
+`ERR_CMD`; a non-ready response becomes `Result::Timeout`, and a failed status read
+remains `Result::TransportError`. The final read does not extend or rearm the command
+deadline. `lastServiceGapUs()` and `lastDeadlineLatenessUs()` report host scheduling
+timing when a timer is available. They describe when the host ran, not when the tuner
+first asserted CTS, and therefore are not proof that the device was late or faulty.
+
+After a confirmed physical tuner reset, or when an application deliberately abandons
+an operation whose caller-owned reply buffer is no longer valid, call:
+
+```cpp
+si468x::Result cancelled = radio.abortCommand();
+```
+
+The method performs no SPI/I2C transaction, clears the pending reply, IRQ and timing
+state, and returns `Result::Aborted` when it cancelled `WaitCts` (`Result::Ok` when the
+driver was already idle). Do not use it to conceal ordinary command-scheduling bugs or
+to force a second command through a legitimately busy driver. A successfully completed
+`hardwareReset()` invokes the same host-side cancellation only after reset has been
+released and its final settling delay has completed.
+
 The status callback is intended to **record/schedule work only**. Do not issue a nested Si468x command from inside the callback while `service()` is processing the current command.
 
 ### Blocking convenience API
@@ -416,6 +438,17 @@ See `MIGRATION_FROM_DABSHIELD.md` for a conceptual mapping. There is deliberatel
 This release has desktop C++11 compile tests and parser/command tests. It has **not yet been validated on every physical Si468x part or every firmware revision**. Hardware validation should include boot, tune/seek, interrupt timing, DSRV load, NVSPI programming and error recovery on the actual board.
 
 ## Revision notes
+
+### 0.9.6 command cancellation and late-service revision
+
+- Added bus-free `abortCommand()` and `Result::Aborted` without changing existing
+  `Result` numeric values.
+- Added one bounded final CTS check at an expired deadline, preserving device and
+  transport errors instead of reporting a false timeout.
+- Added host service-gap/deadline-lateness diagnostics with explicit non-causal
+  semantics.
+- Added state-machine regressions for polling, INTB notification, no-timer operation,
+  timeout, late CTS, read failure, ERR_CMD, abort/reset and 32-bit timer wraparound.
 
 ### 0.9.5 protocol-boundary and audit revision
 

@@ -1,6 +1,6 @@
 # Verification Status
 
-Version: `0.9.5`
+Version: `0.9.6`
 
 The following desktop/static checks were performed on the generated package:
 
@@ -19,6 +19,28 @@ The following desktop/static checks were performed on the generated package:
 - `GET_PROPERTY` multi-property COUNT construction and reply-size validation;
 - fixed HD command layout/range tests for station info, PSD selection, alert tone and enabled-port programming;
 - reset/power callback ordering test confirming RSTB is asserted before an optional board power-enable transition.
+- controlled state-machine tests for BUSY serialization, caller-owned replies,
+  bus-free abort in `WaitCts` and `Idle`, immediate post-abort command execution,
+  and automatic host-state cancellation after successful `hardwareReset()`;
+- final CTS behavior after a host pause: ready CTS completes normally, non-ready CTS
+  produces one bounded timeout decision, and a failed read remains a transport error;
+- INTB wakeup, timer polling, polling without a timer, ERR_CMD reason preservation and
+  unsigned 32-bit timer wraparound;
+- compile-time assertions preserving every pre-0.9.6 `Result` numeric value.
+
+The 0.9.6 verification in this working environment used GCC with
+`-std=c++11 -Wall -Wextra -Werror -pedantic`. Clang was not installed and is therefore
+**not verified in this environment**. These remain desktop transport/state-machine
+tests, not physical Si468x hardware validation.
+
+## 0.9.6 command-state fixes
+
+- `abortCommand()` clears the host-side reply pointer, reply length, IRQ flag, deadline
+  and poll timing without accessing SPI/I2C.
+- `service()` no longer declares timeout before observing the device once at an expired
+  deadline; it makes no retry and does not rearm the deadline.
+- service-gap and deadline-lateness values describe host timing only and are not used as
+  evidence that CTS was unavailable at the original deadline.
 
 Protocol audit fixes made in 0.9.5 include:
 
@@ -52,4 +74,3 @@ This package has not yet been exercised on physical Si4682/83/84/85/88/89 hardwa
 - reset/power-loss recovery during firmware updates.
 
 The supplied application firmware revisions are newer than the images tabulated in AN649 Rev. 1.9. Their exact target compatibility must be checked against the corresponding firmware release information when available.
-
