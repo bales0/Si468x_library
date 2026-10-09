@@ -3314,7 +3314,10 @@ private:
             c.rawComponentField=raw; c.transportModeId=(uint8_t)(raw>>14);
             c.dataGroupFlag=(c.transportModeId==3u)&&((raw&0x2000u)!=0);
             c.componentReference=(c.transportModeId==3u)?(uint16_t)(raw&0x0FFFu):(uint16_t)(raw&0x003Fu);
-            c.componentType=(uint8_t)(_buf[2]>>2); c.primary=(_buf[2]&0x02u)==0;
+            c.componentType=(uint8_t)(_buf[2]>>2);
+            // ETSI EN 300 401: P/S=1 denotes primary; P/S=0 denotes secondary.
+            // AN649 Rev. 1.9 prose describes the opposite polarity.
+            c.primary=(_buf[2]&0x02u)!=0;
             c.conditionalAccess=(_buf[2]&0x01u)!=0; c.userApplicationInfoValid=(_buf[3]&0x01u)!=0;
             if (_sink.onComponent) _sink.onComponent(_sink.context,c);
             ++_componentIndex; if (_componentsRemaining) --_componentsRemaining; _have=0;

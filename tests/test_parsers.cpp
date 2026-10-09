@@ -14,7 +14,44 @@ static void onHeader(void* c,const DabServiceListHeader& x){ Capture* p=(Capture
 static void onService(void* c,const DabServiceEntry& x){ Capture* p=(Capture*)c; p->service=x; ++p->services; }
 static void onComponent(void* c,const DabComponentEntry& x){ Capture* p=(Capture*)c; p->component=x; ++p->components; }
 
+// Exercise the real streaming parser and callback for both P/S polarities,
+// independently toggling CA and UA-valid. No field other than P/S changes meaning.
+static void testPrimaryPolarity() {
+    for (uint8_t ps=0; ps<2; ++ps) {
+        for (uint8_t ca=0; ca<2; ++ca) {
+            for (uint8_t ua=0; ua<2; ++ua) {
+                uint8_t list[8+24+4]; std::memset(list,0,sizeof(list));
+                writeLe16(list,34); writeLe16(list+2,7); list[4]=1;
+                writeLe32(list+8,0x11223344UL); list[13]=1;
+                // ps=1, ca=0, ua=1: 02 00 FE 01 -> 01FE0002.
+                // ps=0, ca=0, ua=1: 02 00 FC 01 -> 01FC0002.
+                list[32]=2; list[34]=(uint8_t)(0xFCu|(ps<<1)|ca); list[35]=ua;
+                Capture cap; DabServiceListSink sink;
+                sink.context=&cap; sink.onHeader=onHeader;
+                sink.onService=onService; sink.onComponent=onComponent;
+                DabServiceListParser parser; parser.setSink(sink);
+                for (size_t i=0; i<sizeof(list); ++i)
+                    assert(parser.feed(list+i,1)==Result::Ok);
+                assert(parser.complete() && !parser.error());
+                assert(cap.headers==1 && cap.services==1 && cap.components==1);
+                assert(cap.header.version==7 && cap.service.serviceId==0x11223344UL);
+                const DabComponentEntry& c=cap.component;
+                const uint32_t expected=0x00FC0002UL|((uint32_t)ps<<17)|
+                                        ((uint32_t)ca<<16)|((uint32_t)ua<<24);
+                assert(c.componentId==expected && c.rawComponentField==2);
+                assert(c.serviceIndex==0 && c.componentIndex==0);
+                assert(c.primary==(ps!=0));
+                assert(c.transportModeId==0 && c.componentType==63);
+                assert(!c.dataGroupFlag && c.componentReference==2);
+                assert(c.conditionalAccess==(ca!=0));
+                assert(c.userApplicationInfoValid==(ua!=0));
+            }
+        }
+    }
+}
+
 int main(){
+    testPrimaryPolarity();
     uint8_t rds[20]={0x80,0,0,0,0x1B,0x1B,0x25,0,0x34,0x12,1,0, 'A','B','C','D','E','F','G','H'};
     FmRdsGroup g; assert(Si468x::parseFmRdsStatus(rds,20,g)==Result::Ok);
     assert(g.tpPtyInterrupt && g.piInterrupt && g.syncInterrupt && g.fifoInterrupt);
@@ -102,6 +139,7 @@ int main(){
     assert(cap.component.dataGroupFlag);
     assert(cap.component.componentReference==0x0123u);
     assert(cap.component.componentType==(0x45u>>2));
+    assert(!cap.component.primary); // component-info 0x45 has P/S=0
     assert(cap.component.conditionalAccess);
     assert(cap.component.userApplicationInfoValid);
 
